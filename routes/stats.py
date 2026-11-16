@@ -2886,25 +2886,6 @@ def _dashboard_sqlite_queries(has_any_filter: bool) -> dict[str, str]:
             GROUP BY bucket, model, provider, COALESCE(api_key, '')
             ORDER BY bucket ASC
         """,
-        "lat": """
-            SELECT COALESCE(model, 'unknown') AS model,
-                   COALESCE(provider, 'unknown') AS provider,
-                   COALESCE(api_key, '') AS api_key,
-                   first_response_time,
-                   CASE WHEN completion_tokens > 0 AND process_time > 0 THEN
-                       CAST(completion_tokens AS REAL) / (
-                           CASE WHEN first_response_time IS NOT NULL AND (process_time - first_response_time) >= 0.1
-                                THEN (process_time - first_response_time)
-                                ELSE process_time
-                           END
-                       )
-                   ELSE 0 END AS req_speed
-            FROM request_stats
-            WHERE timestamp >= {p_start} AND timestamp <= {p_end}
-              AND (first_response_time > 0 OR (completion_tokens > 0 AND process_time > 0))
-            ORDER BY timestamp DESC
-            LIMIT 2000
-        """,
         "recent": """
             SELECT id, timestamp, model, provider, api_key, api_key_name, api_key_group,
                    prompt_tokens, completion_tokens, total_tokens, cached_tokens,
@@ -3141,7 +3122,6 @@ async def get_dashboard_overview(
 
         fmt_q = {"p_bucket": "?", "p_tz": "?", "p_start": "?", "p_end": "?", "p_limit": "?", "p_hm_start": "?"}
         ts_rows = await d1_client.query_all(sql_templates["ts"].format(**fmt_q), [bucket_fmt, sqlite_tz_mod, start_str, end_str])
-        lat_rows = await d1_client.query_all(sql_templates["lat"].format(**fmt_q), [start_str, end_str])
         recent_rows_all = await d1_client.query_all(sql_templates["recent"].format(**fmt_q), [start_str, end_str, fetch_recent_limit])
         recent_rows = [r for r in recent_rows_all if _matches_row(r)][:recent_limit]
         if need_db_heatmap:
@@ -3187,10 +3167,6 @@ async def get_dashboard_overview(
                 ts_rows = (await session.execute(sa_text(sql_templates["ts"].format(**fmt_named)), {
                     "bucket_fmt": bucket_fmt,
                     "tz_mod": sqlite_tz_mod,
-                    "start_str": start_str,
-                    "end_str": end_str,
-                })).mappings().all()
-                lat_rows = (await session.execute(sa_text(sql_templates["lat"].format(**fmt_named)), {
                     "start_str": start_str,
                     "end_str": end_str,
                 })).mappings().all()
@@ -3240,7 +3216,6 @@ async def get_dashboard_overview(
                 )).mappings().all()
 
                 ts_agg: dict[tuple[str, str, str, str], dict[str, Any]] = {}
-                lat_rows = []
                 recent_rows = []
                 for r in raw_window_rows:
                     ts_dt = parse_d1_datetime(r.get("timestamp")) or start_dt
@@ -3309,14 +3284,6 @@ async def get_dashboard_overview(
                         g["gen_comp_tokens"] += ctok
                         g["gen_duration"] += gen_dur
 
-                    if len(lat_rows) < 2000 and (frt > 0 or (ctok > 0 and pt > 0 and gen_dur > 0)):
-                        lat_rows.append({
-                            "model": m_str,
-                            "provider": p_str,
-                            "api_key": k_str,
-                            "first_response_time": frt,
-                            "req_speed": (ctok / gen_dur) if (ctok > 0 and pt > 0 and gen_dur > 0) else 0.0,
-                        })
                     if len(recent_rows) < recent_limit and _matches_row(r):
                         recent_rows.append(r)
 
@@ -3477,27 +3444,33 @@ async def get_dashboard_overview(
             km_entry["key_label"] = k_ident["key_label"]
         _add_stat_acc(km_entry, **stat_args)
 
-    available_models = sorted([
-        {
+    available_models = []
+    for v in all_models_meta.values():
+        if not v["model"] or v["model"] == "unknown":
+            continue
+        m_fin = _finalize_stat_metrics(v)
+        available_models.append({
             "model": v["model"],
             "requests": v["requests"],
             "total_tokens": v["total_tokens"],
-            "cache_hit_rate": _finalize_stat_metrics(v)["cache_hit_rate"],
-            "speed_tok_s": _finalize_stat_metrics(v)["speed_tok_s"],
-        }
-        for v in all_models_meta.values() if v["model"] and v["model"] != "unknown"
-    ], key=lambda x: (x["total_tokens"], x["requests"]), reverse=True)
+            "cache_hit_rate": m_fin["cache_hit_rate"],
+            "speed_tok_s": m_fin["speed_tok_s"],
+        })
+    available_models.sort(key=lambda x: (x["total_tokens"], x["requests"]), reverse=True)
 
-    available_providers = sorted([
-        {
+    available_providers = []
+    for v in all_providers_meta.values():
+        if not v["provider"] or v["provider"] == "unknown":
+            continue
+        p_fin = _finalize_stat_metrics(v)
+        available_providers.append({
             "provider": v["provider"],
             "requests": v["requests"],
             "total_tokens": v["total_tokens"],
-            "success_rate": _finalize_stat_metrics(v)["success_rate"],
-            "cache_hit_rate": _finalize_stat_metrics(v)["cache_hit_rate"],
-        }
-        for v in all_providers_meta.values() if v["provider"] and v["provider"] != "unknown"
-    ], key=lambda x: (x["requests"], x["total_tokens"]), reverse=True)
+            "success_rate": p_fin["success_rate"],
+            "cache_hit_rate": p_fin["cache_hit_rate"],
+        })
+    available_providers.sort(key=lambda x: (x["requests"], x["total_tokens"]), reverse=True)
 
     available_keys = sorted([
         {
@@ -3513,29 +3486,24 @@ async def get_dashboard_overview(
         for v in all_keys_meta.values()
     ], key=lambda x: (x["total_tokens"], x["requests"]), reverse=True)
 
-    filtered_lat_rows = [r for r in lat_rows if _matches_row(r)]
-    frt_list = sorted([_safe_float(r.get("first_response_time")) for r in filtered_lat_rows if _safe_float(r.get("first_response_time")) > 0])
-    speed_list = sorted([_safe_float(r.get("req_speed")) for r in filtered_lat_rows if 0 < _safe_float(r.get("req_speed")) < 2000])
-
-    p90_frt = frt_list[min(len(frt_list) - 1, int(len(frt_list) * 0.9))] if frt_list else 0.0
-    p95_speed = speed_list[min(len(speed_list) - 1, int(len(speed_list) * 0.95))] if speed_list else 0.0
-    avg_speed = (
-        summary_acc["gen_comp"] / summary_acc["gen_dur"]
-        if summary_acc["gen_dur"] > 0
-        else (sum(speed_list) / len(speed_list) if speed_list else 0.0)
-    )
-
     timeseries = []
     peak_bucket_speed = 0.0
+    bucket_frt_values: list[float] = []
     for b_key in sorted(bucket_map.keys()):
         m_out = _finalize_stat_metrics(bucket_map[b_key], rate_digits=2)
         if m_out["speed_tok_s"] > peak_bucket_speed:
             peak_bucket_speed = m_out["speed_tok_s"]
+        if m_out["avg_ttft"] > 0:
+            bucket_frt_values.append(m_out["avg_ttft"])
         if m_out["requests"] == 0:
             m_out["success_rate"] = 100.0
         m_out["bucket"] = b_key
         m_out["label"] = b_key[-5:]
         timeseries.append(m_out)
+
+    bucket_frt_values.sort()
+    p90_frt = bucket_frt_values[min(len(bucket_frt_values) - 1, int(len(bucket_frt_values) * 0.9))] if bucket_frt_values else 0.0
+    avg_speed = (summary_acc["gen_comp"] / summary_acc["gen_dur"]) if summary_acc["gen_dur"] > 0 else 0.0
 
     tot_tokens = summary_acc["total_tokens"]
     tot_cost_usd = summary_acc["cost_usd"]
@@ -3681,7 +3649,7 @@ async def get_dashboard_overview(
         "failed_requests": s_fin["failed_requests"],
         "success_rate": s_fin["success_rate"],
         "avg_speed_tok_s": round(avg_speed, 1),
-        "peak_speed_tok_s": round(max(peak_bucket_speed, p95_speed), 1),
+        "peak_speed_tok_s": round(peak_bucket_speed, 1),
         "avg_process_time": s_fin["avg_process_time"],
         "avg_first_response_time": s_fin["avg_ttft"],
         "p90_first_response_time": round(p90_frt, 2),

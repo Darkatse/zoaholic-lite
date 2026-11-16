@@ -259,7 +259,6 @@ const NAV_SECTIONS = [
   { id: 'section-overview', label: '总览与时序' },
   { id: 'section-key-usage', label: 'Key 用量排行' },
   { id: 'section-distributions', label: '渠道与模型分布' },
-  { id: 'section-channel-health', label: '渠道健康表' },
   { id: 'section-heatmap', label: '工作回溯' },
   { id: 'section-breakdown', label: '用量明细' },
 ] as const;
@@ -738,6 +737,1049 @@ const ActivityHeatmapSection = memo(function ActivityHeatmapSection({
   );
 });
 
+const BreakdownSection = memo(function BreakdownSection({
+  crossBreakdown,
+  keyBreakdown,
+  keyModelBreakdown,
+  modelBreakdown,
+  providerBreakdown,
+  channelAttemptMap,
+  selectedKeys,
+  toggleProviderFilter,
+  toggleModelFilter,
+  toggleKeyFilter,
+  onSelectAnalyticsKey,
+  jumpTab,
+  jumpSeq,
+}: {
+  crossBreakdown: CrossBreakdownRow[];
+  keyBreakdown: KeyBreakdownRow[];
+  keyModelBreakdown: KeyModelBreakdownRow[];
+  modelBreakdown: BreakdownRow[];
+  providerBreakdown: BreakdownRow[];
+  channelAttemptMap: Map<string, { success_rate: number; total_requests: number }>;
+  selectedKeys: string[];
+  toggleProviderFilter: (p: string) => void;
+  toggleModelFilter: (m: string) => void;
+  toggleKeyFilter: (k: string) => void;
+  onSelectAnalyticsKey: (target: { key_hash: string; key_label: string }) => void;
+  jumpTab: 'cross' | 'key' | 'key_model' | 'model' | 'provider';
+  jumpSeq: number;
+}) {
+  const [breakdownTab, setBreakdownTab] = useState<'cross' | 'key' | 'key_model' | 'model' | 'provider'>('cross');
+  const [tableSearch, setTableSearch] = useState('');
+  const [showAllBreakdownRows, setShowAllBreakdownRows] = useState(false);
+
+  useEffect(() => {
+    if (jumpSeq > 0) {
+      setBreakdownTab(jumpTab);
+      setShowAllBreakdownRows(false);
+    }
+  }, [jumpSeq, jumpTab]);
+
+  const filteredCrossRows = useMemo(() => {
+    const q = tableSearch.trim().toLowerCase();
+    if (!q) return crossBreakdown;
+    return crossBreakdown.filter(
+      r => r.provider.toLowerCase().includes(q) || r.model.toLowerCase().includes(q)
+    );
+  }, [crossBreakdown, tableSearch]);
+
+  const filteredModelRows = useMemo(() => {
+    const q = tableSearch.trim().toLowerCase();
+    if (!q) return modelBreakdown;
+    return modelBreakdown.filter(r => (r.model || '').toLowerCase().includes(q));
+  }, [modelBreakdown, tableSearch]);
+
+  const filteredProviderRows = useMemo(() => {
+    const q = tableSearch.trim().toLowerCase();
+    if (!q) return providerBreakdown;
+    return providerBreakdown.filter(r => (r.provider || '').toLowerCase().includes(q));
+  }, [providerBreakdown, tableSearch]);
+
+  const filteredKeyRows = useMemo(() => {
+    const q = tableSearch.trim().toLowerCase();
+    if (!q) return keyBreakdown;
+    return keyBreakdown.filter(
+      r =>
+        r.key_label.toLowerCase().includes(q) ||
+        r.api_key_prefix.toLowerCase().includes(q) ||
+        (r.api_key_group || '').toLowerCase().includes(q) ||
+        (r.parent_name || '').toLowerCase().includes(q) ||
+        (r.top_model || '').toLowerCase().includes(q)
+    );
+  }, [keyBreakdown, tableSearch]);
+
+  const filteredKeyModelRows = useMemo(() => {
+    const q = tableSearch.trim().toLowerCase();
+    if (!q) return keyModelBreakdown;
+    return keyModelBreakdown.filter(
+      r =>
+        r.key_label.toLowerCase().includes(q) ||
+        r.api_key_prefix.toLowerCase().includes(q) ||
+        (r.api_key_group || '').toLowerCase().includes(q) ||
+        r.model.toLowerCase().includes(q)
+    );
+  }, [keyModelBreakdown, tableSearch]);
+
+  const activeLen =
+    breakdownTab === 'cross'
+      ? filteredCrossRows.length
+      : breakdownTab === 'key'
+      ? filteredKeyRows.length
+      : breakdownTab === 'key_model'
+      ? filteredKeyModelRows.length
+      : breakdownTab === 'model'
+      ? filteredModelRows.length
+      : filteredProviderRows.length;
+
+  return (
+    <div
+      id="section-breakdown"
+      style={{ contentVisibility: 'auto', containIntrinsicSize: '0 400px' }}
+      className="bg-card border border-border/80 rounded-2xl p-3.5 sm:p-5 shadow-sm space-y-4 min-w-0 overflow-hidden"
+    >
+      <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center sm:justify-between gap-2.5 sm:gap-3 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <BarChart3 className="w-4 h-4 text-blue-500 shrink-0" />
+          <h3 className="text-sm font-bold text-foreground">用量明细</h3>
+          <span className="text-xs text-muted-foreground">
+            （点击表格任意模型、渠道或 Key 可一键联动全页筛选）
+          </span>
+        </div>
+
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:flex-wrap min-w-0 w-full sm:w-auto">
+          <div className="relative w-full sm:w-48">
+            <Search className="w-3.5 h-3.5 text-muted-foreground absolute left-2.5 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={tableSearch}
+              onChange={e => setTableSearch(e.target.value)}
+              placeholder="搜索 Key、模型或渠道..."
+              className="pl-8 pr-6 py-1.5 sm:py-1 text-xs bg-background border border-border rounded-lg text-foreground w-full focus:outline-none focus:ring-1 focus:ring-primary"
+            />
+            {tableSearch && (
+              <button
+                type="button"
+                onClick={() => setTableSearch('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
+          </div>
+
+          <div className="inline-flex items-center bg-muted/50 border border-border/80 rounded-lg p-0.5 gap-0.5 overflow-x-auto no-scrollbar max-w-full flex-nowrap sm:flex-wrap min-w-0">
+            {[
+              { key: 'cross', label: `渠道 × 模型 (${filteredCrossRows.length})` },
+              { key: 'key', label: `按 Key 汇总 (${filteredKeyRows.length})` },
+              { key: 'key_model', label: `Key × 模型 (${filteredKeyModelRows.length})` },
+              { key: 'model', label: `按模型汇总 (${filteredModelRows.length})` },
+              { key: 'provider', label: `按渠道汇总 (${filteredProviderRows.length})` },
+            ].map(tab => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => {
+                  setBreakdownTab(tab.key as 'cross' | 'key' | 'key_model' | 'model' | 'provider');
+                  setShowAllBreakdownRows(false);
+                }}
+                className={`px-2.5 sm:px-3 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  breakdownTab === tab.key
+                    ? 'bg-card text-foreground shadow-sm border border-border/60 font-semibold'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {breakdownTab === 'cross' && (
+        <div className="overflow-x-auto border border-border/70 rounded-xl w-full">
+          <table className="w-full min-w-[720px] text-left text-xs whitespace-nowrap">
+            <thead className="bg-muted/60 text-muted-foreground font-medium">
+              <tr>
+                <th className="px-4 py-3">渠道</th>
+                <th className="px-4 py-3">模型</th>
+                <th className="px-4 py-3 text-right">请求次数</th>
+                <th className="px-4 py-3 text-right">成功率</th>
+                <th className="px-4 py-3 text-right">输入 Token</th>
+                <th className="px-4 py-3 text-right">输出 Token</th>
+                <th className="px-4 py-3 text-right">缓存命中率</th>
+                <th className="px-4 py-3 text-right">生成速度</th>
+                <th className="px-4 py-3 text-right">总 Token</th>
+                <th className="px-4 py-3 text-right">实记费用 / 等价</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border/50 tabular-nums">
+              {filteredCrossRows.length === 0 ? (
+                <tr>
+                  <td colSpan={10} className="px-4 py-8 text-center text-muted-foreground">
+                    暂无匹配的明细记录
+                  </td>
+                </tr>
+              ) : (
+                (showAllBreakdownRows ? filteredCrossRows : filteredCrossRows.slice(0, 50)).map((entry, i) => (
+                  <tr key={i} className="hover:bg-muted/30 transition-colors">
+                    <td className="px-4 py-3 font-medium text-foreground">
+                      <button
+                        type="button"
+                        onClick={() => toggleProviderFilter(entry.provider)}
+                        className="hover:text-primary transition-colors"
+                      >
+                        {entry.provider}
+                      </button>
+                    </td>
+                    <td className="px-4 py-3 font-mono">
+                      <button
+                        type="button"
+                        onClick={() => toggleModelFilter(entry.model)}
+                        className="text-foreground font-semibold hover:text-primary transition-colors"
+                      >
+                        {entry.model}
+                      </button>
+                    </td>
+                    <td className="px-4 py-3 text-right text-muted-foreground">
+                      {entry.requests.toLocaleString()}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <span
+                        className={`font-semibold ${
+                          entry.success_rate >= 95
+                            ? 'text-emerald-400'
+                            : entry.success_rate >= 80
+                            ? 'text-amber-400'
+                            : 'text-rose-400'
+                        }`}
+                      >
+                        {entry.success_rate.toFixed(1)}%
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-right text-muted-foreground">
+                      {formatTokens(entry.prompt_tokens)}
+                    </td>
+                    <td className="px-4 py-3 text-right text-muted-foreground">
+                      {formatTokens(entry.completion_tokens)}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <span className="text-cyan-400 font-semibold">{entry.cache_hit_rate.toFixed(1)}%</span>
+                      <span className="text-muted-foreground ml-1">({formatTokens(entry.cached_tokens)})</span>
+                    </td>
+                    <td className="px-4 py-3 text-right text-muted-foreground">
+                      {entry.speed_tok_s > 0 ? `${entry.speed_tok_s.toFixed(1)} tok/s` : '-'}
+                    </td>
+                    <td className="px-4 py-3 text-right font-mono font-bold text-foreground">
+                      {formatTokens(entry.total_tokens)}
+                    </td>
+                    <td className="px-4 py-3 text-right font-mono">
+                      <span className="text-amber-500 font-semibold">
+                        {formatCost(entry.recorded_cost_usd)}
+                      </span>
+                      <span className="text-rose-400 ml-1.5">(¥{entry.cost_cny.toFixed(2)})</span>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {breakdownTab === 'key' && (
+        <div className="overflow-x-auto border border-border/70 rounded-xl w-full">
+          <table className="w-full min-w-[780px] text-left text-xs whitespace-nowrap">
+            <thead className="bg-muted/60 text-muted-foreground font-medium">
+              <tr>
+                <th className="px-4 py-3">API Key 名称 / 前缀</th>
+                <th className="px-4 py-3">分组 / 母 Key</th>
+                <th className="px-4 py-3 text-right">请求数</th>
+                <th className="px-4 py-3 text-right">成功率</th>
+                <th className="px-4 py-3 text-right">输入 Token</th>
+                <th className="px-4 py-3 text-right">输出 Token</th>
+                <th className="px-4 py-3 text-right">缓存命中率</th>
+                <th className="px-4 py-3 text-right">速度 / 首字</th>
+                <th className="px-4 py-3 text-right">总 Token (占比)</th>
+                <th className="px-4 py-3 text-right">实记费用 / 等价</th>
+                <th className="px-4 py-3 text-right">详情</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border/50 tabular-nums">
+              {filteredKeyRows.length === 0 ? (
+                <tr>
+                  <td colSpan={11} className="px-4 py-8 text-center text-muted-foreground">
+                    暂无匹配的 API Key 用量记录
+                  </td>
+                </tr>
+              ) : (
+                (showAllBreakdownRows ? filteredKeyRows : filteredKeyRows.slice(0, 50)).map(row => (
+                  <tr
+                    key={row.key_hash}
+                    onClick={() => toggleKeyFilter(row.key_hash)}
+                    className={`hover:bg-muted/30 cursor-pointer transition-colors ${
+                      selectedKeys.includes(row.key_hash) ? 'bg-amber-500/10' : ''
+                    }`}
+                  >
+                    <td className="px-4 py-3">
+                      <div className="font-semibold text-foreground">{row.key_label}</div>
+                      <div className="text-[10px] font-mono text-muted-foreground">
+                        {row.api_key_prefix} · {row.unique_models} 模型
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground">
+                      {row.api_key_group || '-'}
+                      {row.parent_name ? ` (母: ${row.parent_name})` : ''}
+                    </td>
+                    <td className="px-4 py-3 text-right">{row.requests.toLocaleString()}</td>
+                    <td className="px-4 py-3 text-right font-semibold text-emerald-400">
+                      {row.success_rate.toFixed(1)}%
+                    </td>
+                    <td className="px-4 py-3 text-right text-muted-foreground">
+                      {formatTokens(row.prompt_tokens)}
+                    </td>
+                    <td className="px-4 py-3 text-right text-muted-foreground">
+                      {formatTokens(row.completion_tokens)}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <span className="text-cyan-400 font-bold">{row.cache_hit_rate.toFixed(1)}%</span>
+                      <span className="text-muted-foreground ml-1">({formatTokens(row.cached_tokens)})</span>
+                    </td>
+                    <td className="px-4 py-3 text-right text-muted-foreground">
+                      <span className="text-foreground font-medium">{row.speed_tok_s.toFixed(1)}</span> tok/s ·{' '}
+                      {row.avg_ttft.toFixed(1)}s
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        <span className="font-semibold text-foreground">{formatTokens(row.total_tokens)}</span>
+                        <div className="w-14 h-1.5 bg-muted rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-amber-500"
+                            style={{ width: `${Math.min(100, row.token_share)}%` }}
+                          />
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-right font-mono">
+                      <span className="text-amber-500 font-semibold">
+                        {formatCost(row.recorded_cost_usd)}
+                      </span>
+                      <span className="text-rose-400 ml-1.5">(¥{row.cost_cny.toFixed(2)})</span>
+                    </td>
+                    <td
+                      className="px-4 py-3 text-right"
+                      onClick={e => e.stopPropagation()}
+                    >
+                      {row.can_drilldown ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onSelectAnalyticsKey({
+                              key_hash: row.key_hash,
+                              key_label: row.key_label,
+                            })
+                          }
+                          className="px-2 py-0.5 text-[11px] font-medium rounded bg-primary/10 text-primary hover:bg-primary/20 border border-primary/30"
+                        >
+                          分析
+                        </button>
+                      ) : (
+                        '-'
+                      )}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {breakdownTab === 'key_model' && (
+        <div className="overflow-x-auto border border-border/70 rounded-xl w-full">
+          <table className="w-full min-w-[720px] text-left text-xs whitespace-nowrap">
+            <thead className="bg-muted/60 text-muted-foreground font-medium">
+              <tr>
+                <th className="px-4 py-3">API Key</th>
+                <th className="px-4 py-3">模型</th>
+                <th className="px-4 py-3 text-right">请求次数</th>
+                <th className="px-4 py-3 text-right">成功率</th>
+                <th className="px-4 py-3 text-right">输入 Token</th>
+                <th className="px-4 py-3 text-right">输出 Token</th>
+                <th className="px-4 py-3 text-right">缓存命中率</th>
+                <th className="px-4 py-3 text-right">生成速度</th>
+                <th className="px-4 py-3 text-right">总 Token</th>
+                <th className="px-4 py-3 text-right">实记费用 / 等价</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border/50 tabular-nums">
+              {filteredKeyModelRows.length === 0 ? (
+                <tr>
+                  <td colSpan={10} className="px-4 py-8 text-center text-muted-foreground">
+                    暂无匹配的 Key × 模型明细记录
+                  </td>
+                </tr>
+              ) : (
+                (showAllBreakdownRows ? filteredKeyModelRows : filteredKeyModelRows.slice(0, 50)).map((entry, i) => (
+                  <tr key={i} className="hover:bg-muted/30 transition-colors">
+                    <td className="px-4 py-3 font-medium text-foreground">
+                      <button
+                        type="button"
+                        onClick={() => toggleKeyFilter(entry.key_hash)}
+                        className="hover:text-amber-400 transition-colors text-left"
+                      >
+                        <div className="font-semibold">{entry.key_label}</div>
+                        <div className="text-[10px] font-mono text-muted-foreground">
+                          {entry.api_key_prefix}
+                        </div>
+                      </button>
+                    </td>
+                    <td className="px-4 py-3 font-mono">
+                      <button
+                        type="button"
+                        onClick={() => toggleModelFilter(entry.model)}
+                        className="text-foreground font-semibold hover:text-primary transition-colors"
+                      >
+                        {entry.model}
+                      </button>
+                    </td>
+                    <td className="px-4 py-3 text-right text-muted-foreground">
+                      {entry.requests.toLocaleString()}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <span
+                        className={`font-semibold ${
+                          entry.success_rate >= 95
+                            ? 'text-emerald-400'
+                            : entry.success_rate >= 80
+                            ? 'text-amber-400'
+                            : 'text-rose-400'
+                        }`}
+                      >
+                        {entry.success_rate.toFixed(1)}%
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-right text-muted-foreground">
+                      {formatTokens(entry.prompt_tokens)}
+                    </td>
+                    <td className="px-4 py-3 text-right text-muted-foreground">
+                      {formatTokens(entry.completion_tokens)}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <span className="text-cyan-400 font-semibold">{entry.cache_hit_rate.toFixed(1)}%</span>
+                      <span className="text-muted-foreground ml-1">({formatTokens(entry.cached_tokens)})</span>
+                    </td>
+                    <td className="px-4 py-3 text-right text-muted-foreground">
+                      {entry.speed_tok_s > 0 ? `${entry.speed_tok_s.toFixed(1)} tok/s` : '-'}
+                    </td>
+                    <td className="px-4 py-3 text-right font-mono font-bold text-foreground">
+                      {formatTokens(entry.total_tokens)}
+                    </td>
+                    <td className="px-4 py-3 text-right font-mono">
+                      <span className="text-amber-500 font-semibold">
+                        {formatCost(entry.recorded_cost_usd)}
+                      </span>
+                      <span className="text-rose-400 ml-1.5">(¥{entry.cost_cny.toFixed(2)})</span>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {breakdownTab === 'model' && (
+        <div className="overflow-x-auto border border-border/70 rounded-xl w-full">
+          <table className="w-full min-w-[680px] text-left text-xs whitespace-nowrap">
+            <thead className="bg-muted/60 text-muted-foreground font-medium">
+              <tr>
+                <th className="px-4 py-3">模型名称</th>
+                <th className="px-4 py-3 text-right">请求数</th>
+                <th className="px-4 py-3 text-right">成功率</th>
+                <th className="px-4 py-3 text-right">输入 Token</th>
+                <th className="px-4 py-3 text-right">输出 Token</th>
+                <th className="px-4 py-3 text-right">独立缓存命中率</th>
+                <th className="px-4 py-3 text-right">速度 / 首字</th>
+                <th className="px-4 py-3 text-right">总 Token (占比)</th>
+                <th className="px-4 py-3 text-right">API 等价</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border/50 tabular-nums">
+              {(showAllBreakdownRows ? filteredModelRows : filteredModelRows.slice(0, 50)).map(row => (
+                <tr
+                  key={row.model}
+                  onClick={() => row.model && toggleModelFilter(row.model)}
+                  className="hover:bg-muted/30 cursor-pointer transition-colors"
+                >
+                  <td className="px-4 py-3 font-semibold text-foreground">{row.model}</td>
+                  <td className="px-4 py-3 text-right">{row.requests.toLocaleString()}</td>
+                  <td className="px-4 py-3 text-right font-semibold text-emerald-400">
+                    {row.success_rate.toFixed(1)}%
+                  </td>
+                  <td className="px-4 py-3 text-right text-muted-foreground">
+                    {formatTokens(row.prompt_tokens)}
+                  </td>
+                  <td className="px-4 py-3 text-right text-muted-foreground">
+                    {formatTokens(row.completion_tokens)}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <span className="text-cyan-400 font-bold">{row.cache_hit_rate.toFixed(1)}%</span>
+                    <span className="text-muted-foreground ml-1">({formatTokens(row.cached_tokens)})</span>
+                  </td>
+                  <td className="px-4 py-3 text-right text-muted-foreground">
+                    <span className="text-foreground font-medium">{row.speed_tok_s.toFixed(1)}</span> tok/s ·{' '}
+                    {row.avg_ttft.toFixed(1)}s
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <div className="flex items-center justify-end gap-2">
+                      <span className="font-semibold text-foreground">{formatTokens(row.total_tokens)}</span>
+                      <div className="w-14 h-1.5 bg-muted rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-[#ef7d52]"
+                          style={{ width: `${Math.min(100, row.token_share)}%` }}
+                        />
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-right font-semibold text-rose-400">
+                    ¥{row.cost_cny.toFixed(2)} (${row.cost_usd.toFixed(2)})
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {breakdownTab === 'provider' && (
+        <div className="overflow-x-auto border border-border/70 rounded-xl w-full">
+          <table className="w-full min-w-[680px] text-left text-xs whitespace-nowrap">
+            <thead className="bg-muted/60 text-muted-foreground font-medium">
+              <tr>
+                <th className="px-4 py-3">渠道名称</th>
+                <th className="px-4 py-3">健康状态</th>
+                <th className="px-4 py-3 text-right">请求数 (尝试数)</th>
+                <th className="px-4 py-3 text-right">成功率 (渠道尝试)</th>
+                <th className="px-4 py-3 text-right">缓存命中率</th>
+                <th className="px-4 py-3 text-right">平均速度 / 首字</th>
+                <th className="px-4 py-3 text-right">总 Token</th>
+                <th className="px-4 py-3 text-right">API 等价</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border/50 tabular-nums">
+              {(showAllBreakdownRows ? filteredProviderRows : filteredProviderRows.slice(0, 50)).map(row => {
+                const attemptInfo = row.provider ? channelAttemptMap.get(row.provider) : undefined;
+                const effectiveRate = attemptInfo ? attemptInfo.success_rate * 100 : row.success_rate;
+                const isHealthy = effectiveRate >= 95;
+                const isWarning = effectiveRate < 95 && effectiveRate >= 80;
+                return (
+                  <tr
+                    key={row.provider}
+                    onClick={() => row.provider && toggleProviderFilter(row.provider)}
+                    className="hover:bg-muted/30 cursor-pointer transition-colors"
+                  >
+                    <td className="px-4 py-3 font-semibold text-foreground">{row.provider}</td>
+                    <td className="px-4 py-3">
+                      <span
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border ${
+                          isHealthy
+                            ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'
+                            : isWarning
+                            ? 'bg-amber-500/10 text-amber-500 border-amber-500/20'
+                            : 'bg-red-500/10 text-red-500 border-red-500/20'
+                        }`}
+                      >
+                        {isHealthy ? (
+                          <CheckCircle2 className="w-3 h-3" />
+                        ) : (
+                          <AlertCircle className="w-3 h-3" />
+                        )}
+                        {isHealthy ? '良好' : isWarning ? '警告' : '异常'}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <span className="font-medium text-foreground">{row.requests.toLocaleString()}</span>
+                      {attemptInfo && attemptInfo.total_requests !== row.requests && (
+                        <span className="text-muted-foreground ml-1">({attemptInfo.total_requests.toLocaleString()})</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right font-semibold">
+                      <span className={isHealthy ? 'text-emerald-400' : isWarning ? 'text-amber-400' : 'text-rose-400'}>
+                        {row.success_rate.toFixed(1)}%
+                      </span>
+                      {attemptInfo && (
+                        <span className="text-muted-foreground ml-1 font-normal">
+                          ({(attemptInfo.success_rate * 100).toFixed(1)}%)
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right text-cyan-400 font-bold">
+                      {row.cache_hit_rate.toFixed(1)}%
+                    </td>
+                    <td className="px-4 py-3 text-right text-muted-foreground">
+                      <span className="text-foreground font-medium">{row.speed_tok_s.toFixed(1)}</span> tok/s ·{' '}
+                      {row.avg_ttft.toFixed(1)}s
+                    </td>
+                    <td className="px-4 py-3 text-right font-semibold text-foreground">
+                      {formatTokens(row.total_tokens)}
+                    </td>
+                    <td className="px-4 py-3 text-right font-semibold text-rose-400">
+                      ¥{row.cost_cny.toFixed(2)} (${row.cost_usd.toFixed(2)})
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {activeLen > 50 && (
+        <div className="flex justify-center pt-1">
+          <button
+            type="button"
+            onClick={() => setShowAllBreakdownRows(v => !v)}
+            className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground bg-muted/40 hover:bg-muted/70 border border-border/70 rounded-xl transition-colors"
+          >
+            {showAllBreakdownRows ? (
+              <>
+                收起至前 50 条记录 <ChevronUp className="w-3.5 h-3.5" />
+              </>
+            ) : (
+              <>
+                展开全部 {activeLen} 条记录 <ChevronDown className="w-3.5 h-3.5" />
+              </>
+            )}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+});
+
+const KpiOverviewCards = memo(function KpiOverviewCards({
+  summary,
+  selectedModels,
+  keyCount,
+  providerCount,
+  modelBreakdown,
+  tokenSegments,
+  tokenSeries,
+  reqSeries,
+  speedSeries,
+  cacheRateSeries,
+  costSeries,
+  scrollToSection,
+  toggleModelFilter,
+}: {
+  summary: OverviewSummary | null;
+  selectedModels: string[];
+  keyCount: number;
+  providerCount: number;
+  modelBreakdown: BreakdownRow[];
+  tokenSegments: { cachedPct: number; uncachedPct: number; compPct: number };
+  tokenSeries: number[];
+  reqSeries: number[];
+  speedSeries: number[];
+  cacheRateSeries: number[];
+  costSeries: number[];
+  scrollToSection: (id: string) => void;
+  toggleModelFilter: (m: string) => void;
+}) {
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-2.5 sm:gap-3.5 min-w-0">
+      {/* Card 1: TOKEN 消耗 */}
+      <div className="relative bg-card border border-border/80 rounded-2xl p-3 sm:p-4 shadow-sm overflow-hidden flex flex-col justify-between min-h-[172px] sm:min-h-[212px] min-w-0">
+        <div className="absolute left-0 top-3 bottom-3 w-1 rounded-r-full bg-gradient-to-b from-indigo-500 via-purple-500 to-amber-500" />
+        <div className="min-w-0">
+          <div className="flex items-center justify-between gap-1 text-[11px] sm:text-xs font-medium text-muted-foreground">
+            <span className="inline-flex items-center gap-1 sm:gap-1.5 truncate">
+              <span className="text-indigo-400">◆</span>
+              <span className="truncate">TOKEN 消耗</span>
+            </span>
+            {selectedModels.length === 1 && (
+              <span className="text-[10px] text-primary truncate max-w-[65px] sm:max-w-[90px]" title={selectedModels[0]}>
+                {selectedModels[0]}
+              </span>
+            )}
+          </div>
+          <div className="mt-1.5 sm:mt-2 text-2xl sm:text-3xl font-bold tracking-tight tabular-nums text-foreground truncate">
+            {formatTokens(summary?.total_tokens || 0)}
+          </div>
+          <div className="mt-1.5 sm:mt-2 space-y-0.5 sm:space-y-1 text-[10px] sm:text-[11px] text-muted-foreground tabular-nums leading-snug">
+            <div className="flex flex-wrap items-center gap-x-1">
+              <span>输入 <strong className="font-semibold text-foreground/90">{formatTokens(summary?.prompt_tokens || 0)}</strong></span>
+              <span>·</span>
+              <span>输出 <strong className="font-semibold text-foreground/90">{formatTokens(summary?.completion_tokens || 0)}</strong></span>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-1">
+              <span>未命中 <strong className="font-semibold text-foreground/90">{formatTokens(summary?.uncached_tokens || 0)}</strong></span>
+              <span>·</span>
+              <span>缓存 <strong className="font-semibold text-foreground/90">{formatTokens(summary?.cached_tokens || 0)}</strong></span>
+            </div>
+          </div>
+          <div className="mt-2 sm:mt-2.5 flex items-center gap-1">
+            <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden flex">
+              <div
+                className="h-full bg-slate-300 dark:bg-slate-200"
+                style={{ width: `${tokenSegments.cachedPct}%` }}
+                title={`缓存命中: ${tokenSegments.cachedPct.toFixed(1)}%`}
+              />
+              <div
+                className="h-full bg-amber-500"
+                style={{ width: `${tokenSegments.uncachedPct}%` }}
+                title={`未缓存输入: ${tokenSegments.uncachedPct.toFixed(1)}%`}
+              />
+              <div
+                className="h-full bg-emerald-500"
+                style={{ width: `${tokenSegments.compPct}%` }}
+                title={`输出 Token: ${tokenSegments.compPct.toFixed(1)}%`}
+              />
+            </div>
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+          </div>
+        </div>
+        <div className="mt-2 sm:mt-2.5 pt-1">
+          <MiniSparkline values={tokenSeries} strokeColor="#e07a5f" gradientId="spark-token" />
+        </div>
+      </div>
+
+      {/* Card 2: 请求数 */}
+      <div className="bg-card border border-border/80 rounded-2xl p-3 sm:p-4 shadow-sm overflow-hidden flex flex-col justify-between min-h-[172px] sm:min-h-[212px] min-w-0">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center justify-between gap-1 text-[11px] sm:text-xs font-medium text-muted-foreground">
+            <span className="inline-flex items-center gap-1 sm:gap-1.5 shrink-0">
+              <span className="text-sky-400">⇄</span>
+              <span>请求数</span>
+            </span>
+            <div className="inline-flex items-center gap-1 flex-wrap">
+              <button
+                type="button"
+                onClick={() => scrollToSection('section-key-usage')}
+                title="点击跳转到 Key 用量排行"
+                className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 text-[10px] transition-colors whitespace-nowrap"
+              >
+                Key {summary?.active_keys ?? keyCount}
+              </button>
+              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-purple-500/10 text-purple-400 text-[10px] whitespace-nowrap">
+                渠道 {providerCount}
+              </span>
+            </div>
+          </div>
+          <div className="mt-1.5 sm:mt-2 flex items-baseline gap-1 min-w-0">
+            <span className="text-2xl sm:text-3xl font-bold tracking-tight tabular-nums text-foreground truncate">
+              {(summary?.total_requests || 0).toLocaleString()}
+            </span>
+            <span className="text-xs text-muted-foreground shrink-0">次</span>
+          </div>
+          <div className="mt-1.5 sm:mt-2 text-[10px] sm:text-[11px] text-muted-foreground tabular-nums leading-snug flex flex-wrap items-center gap-x-1">
+            <span>失败 <strong className="font-semibold text-foreground/90">{(summary?.failed_requests || 0).toLocaleString()}</strong></span>
+            <span>·</span>
+            <span>成功率 <strong className="font-semibold text-foreground/90">{(summary?.success_rate || 0).toFixed(1)}%</strong></span>
+          </div>
+        </div>
+        <div className="mt-2 sm:mt-2.5 pt-1">
+          <MiniSparkline values={reqSeries} strokeColor="#6488ea" gradientId="spark-req" />
+        </div>
+      </div>
+
+      {/* Card 3: 生成速度 */}
+      <div className="bg-card border border-border/80 rounded-2xl p-3 sm:p-4 shadow-sm overflow-hidden flex flex-col justify-between min-h-[172px] sm:min-h-[212px] min-w-0">
+        <div className="min-w-0">
+          <div className="flex items-center gap-1 sm:gap-1.5 text-[11px] sm:text-xs font-medium text-muted-foreground">
+            <span className="text-amber-400">⚡</span>
+            <span className="truncate">生成速度</span>
+          </div>
+          <div className="mt-1.5 sm:mt-2 flex items-baseline gap-1 min-w-0">
+            <span className="text-2xl sm:text-3xl font-bold tracking-tight tabular-nums text-foreground truncate">
+              {(summary?.avg_speed_tok_s || 0).toFixed(1)}
+            </span>
+            <span className="text-xs text-muted-foreground shrink-0">tok/s</span>
+          </div>
+          <div className="mt-1.5 sm:mt-2 space-y-0.5 sm:space-y-1 text-[10px] sm:text-[11px] text-muted-foreground tabular-nums leading-snug">
+            <div className="flex flex-wrap items-center gap-x-1">
+              <span>耗时 <strong className="font-semibold text-foreground/90">{(summary?.avg_process_time || 0).toFixed(2)}s</strong></span>
+              <span>·</span>
+              <span>首字 <strong className="font-semibold text-foreground/90">{(summary?.avg_first_response_time || 0).toFixed(2)}s</strong></span>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-1">
+              <span>峰值 <strong className="font-semibold text-foreground/90">{Math.round(summary?.peak_speed_tok_s || 0)}</strong></span>
+              <span>·</span>
+              <span>p90 <strong className="font-semibold text-foreground/90">{(summary?.p90_first_response_time || 0).toFixed(2)}s</strong></span>
+            </div>
+          </div>
+        </div>
+        <div className="mt-2 sm:mt-2.5 pt-1">
+          <MiniSparkline values={speedSeries} strokeColor="#e07a5f" gradientId="spark-speed" />
+        </div>
+      </div>
+
+      {/* Card 4: 缓存命中率 */}
+      <div className="bg-card border border-border/80 rounded-2xl p-3 sm:p-4 shadow-sm overflow-hidden flex flex-col justify-between min-h-[172px] sm:min-h-[212px] min-w-0">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center justify-between gap-1 text-[11px] sm:text-xs font-medium text-muted-foreground">
+            <span className="inline-flex items-center gap-1 sm:gap-1.5 shrink-0">
+              <span className="text-cyan-400">♻</span>
+              <span>缓存命中率</span>
+            </span>
+            <span className="text-[10px] text-cyan-400 font-medium hidden sm:inline">
+              {selectedModels.length === 1
+                ? '单模型精确'
+                : selectedModels.length > 1
+                ? `已选 ${selectedModels.length} 模型`
+                : '点击模型可单看'}
+            </span>
+          </div>
+          <div className="mt-1.5 sm:mt-2 text-2xl sm:text-3xl font-bold tracking-tight tabular-nums text-foreground truncate">
+            {(summary?.cache_hit_rate || 0).toFixed(1)}%
+          </div>
+          <div className="mt-1 sm:mt-1.5 text-[10px] sm:text-[11px] text-muted-foreground tabular-nums leading-snug">
+            缓存复用 <span className="font-semibold text-foreground/90">{formatTokens(summary?.cached_tokens || 0)}</span> tok
+          </div>
+
+          {selectedModels.length === 0 && modelBreakdown.length > 0 && (
+            <div className="mt-1.5 sm:mt-2 space-y-1 border-t border-border/50 pt-1.5">
+              {modelBreakdown.slice(0, 2).map(m => (
+                <button
+                  key={m.model}
+                  type="button"
+                  onClick={() => m.model && toggleModelFilter(m.model)}
+                  className="w-full flex items-center justify-between gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors tabular-nums min-w-0"
+                  title={`点击只看 ${m.model} 的缓存与速度`}
+                >
+                  <span className="truncate flex-1 text-left">{m.model}</span>
+                  <span className="font-semibold text-cyan-400 shrink-0">{m.cache_hit_rate.toFixed(1)}%</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="mt-2 pt-0.5">
+          <MiniSparkline values={cacheRateSeries} strokeColor="#6488ea" gradientId="spark-cache" />
+        </div>
+      </div>
+
+      {/* Card 5: API 等价 / 费用 */}
+      <div className="bg-card border border-border/80 rounded-2xl p-3 sm:p-4 shadow-sm overflow-hidden flex flex-col justify-between min-h-[172px] sm:min-h-[212px] min-w-0">
+        <div className="min-w-0">
+          <div className="flex items-center gap-1 sm:gap-1.5 text-[11px] sm:text-xs font-medium text-muted-foreground">
+            <span className="text-rose-400">¥</span>
+            <span className="truncate">API 等价 / 费用</span>
+          </div>
+          <div className="mt-1.5 sm:mt-2 text-2xl sm:text-3xl font-bold tracking-tight tabular-nums text-rose-400 truncate">
+            ¥ {(summary?.total_cost_cny || 0).toFixed(2)}
+          </div>
+          <div className="mt-1.5 sm:mt-2 space-y-0.5 sm:space-y-1 text-[10px] sm:text-[11px] text-muted-foreground tabular-nums leading-snug">
+            <div className="flex flex-wrap items-center gap-x-1">
+              <span>折合 <strong className="text-emerald-400 font-semibold">${(summary?.total_cost_usd || 0).toFixed(2)}</strong></span>
+              <span>·</span>
+              <span>实记 <strong className="font-semibold text-foreground/90">${(summary?.recorded_cost_usd || 0).toFixed(2)}</strong></span>
+            </div>
+            <div>
+              单次均价 ¥
+              {summary && summary.total_requests > 0
+                ? (summary.total_cost_cny / summary.total_requests).toFixed(3)
+                : '0.000'}
+            </div>
+          </div>
+        </div>
+        <div className="mt-2 sm:mt-2.5 pt-1">
+          <MiniSparkline values={costSeries} strokeColor="#e07a5f" gradientId="spark-cost" />
+        </div>
+      </div>
+
+      {/* Card 6: 请求成功率 */}
+      <div className="bg-card border border-border/80 rounded-2xl p-3 sm:p-4 shadow-sm overflow-hidden flex flex-col justify-between min-h-[172px] sm:min-h-[212px] min-w-0">
+        <div className="flex items-center gap-1 sm:gap-1.5 text-[11px] sm:text-xs font-medium text-muted-foreground">
+          <span className="text-emerald-400">✓</span>
+          <span className="truncate">请求成功率</span>
+        </div>
+        <SuccessDonutGauge
+          rate={summary?.success_rate || 0}
+          total={summary?.total_requests || 0}
+        />
+        <div className="text-center text-[10px] sm:text-[11px] text-muted-foreground tabular-nums truncate">
+          {(summary?.total_requests || 0).toLocaleString()} 次 · 失败{' '}
+          <span className="font-semibold text-foreground/90">{(summary?.failed_requests || 0).toLocaleString()}</span> 次
+        </div>
+      </div>
+    </div>
+  );
+});
+
+const DistributionsSection = memo(function DistributionsSection({
+  formattedChannelStats,
+  modelPieData,
+  formattedEndpointStats,
+  tooltipStyle,
+  toggleProviderFilter,
+  toggleModelFilter,
+}: {
+  formattedChannelStats: { name: string; success_rate: number; requests: number }[];
+  modelPieData: { model: string; count: number; tokens?: number }[];
+  formattedEndpointStats: { name: string; value: number }[];
+  tooltipStyle: Record<string, string>;
+  toggleProviderFilter: (p: string) => void;
+  toggleModelFilter: (m: string) => void;
+}) {
+  return (
+    <div
+      id="section-distributions"
+      style={{ contentVisibility: 'auto', containIntrinsicSize: '0 300px' }}
+      className="grid grid-cols-1 lg:grid-cols-12 gap-4 min-w-0"
+    >
+      <div className="lg:col-span-5 bg-card border border-border/80 rounded-2xl p-3.5 sm:p-5 shadow-sm min-w-0 overflow-hidden">
+        <div className="flex items-center justify-between gap-2 mb-4">
+          <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
+            <Cpu className="w-4 h-4 text-emerald-500 shrink-0" />
+            渠道成功率 (%)
+          </h3>
+          <span className="text-[11px] text-muted-foreground">点击柱子可筛选渠道</span>
+        </div>
+        <div className="h-56 sm:h-60 min-w-0">
+          {formattedChannelStats.length === 0 ? (
+            <div className="h-full flex items-center justify-center text-xs text-muted-foreground">
+              暂无渠道数据
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={formattedChannelStats} margin={{ top: 0, right: 0, left: -12, bottom: 0 }}>
+                <XAxis dataKey="name" stroke={AXIS_COLOR} fontSize={11} tickLine={false} axisLine={false} />
+                <YAxis stroke={AXIS_COLOR} fontSize={11} tickLine={false} axisLine={false} domain={[0, 100]} />
+                <Tooltip
+                  cursor={{ fill: 'hsl(var(--muted) / 0.5)' }}
+                  contentStyle={tooltipStyle}
+                  formatter={(value: number) => [`${value.toFixed(1)}%`, '成功率']}
+                />
+                <Bar
+                  dataKey="success_rate"
+                  name="成功率"
+                  radius={[4, 4, 0, 0]}
+                  className="cursor-pointer"
+                  isAnimationActive={false}
+                  onClick={(data: any) => data?.name && toggleProviderFilter(data.name)}
+                >
+                  {formattedChannelStats.map((entry, index) => (
+                    <Cell
+                      key={`cell-${index}`}
+                      fill={
+                        entry.success_rate >= 95
+                          ? SUCCESS_COLOR
+                          : entry.success_rate >= 80
+                          ? WARNING_COLOR
+                          : ERROR_COLOR
+                      }
+                    />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+      </div>
+
+      <div className="lg:col-span-4 bg-card border border-border/80 rounded-2xl p-3.5 sm:p-5 shadow-sm min-w-0 overflow-hidden">
+        <div className="flex items-center justify-between gap-2 mb-4">
+          <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
+            <Activity className="w-4 h-4 text-blue-500 shrink-0" />
+            模型请求量分布
+          </h3>
+          <span className="text-[11px] text-muted-foreground">点击扇区可筛选模型</span>
+        </div>
+        <div className="h-60 min-w-0">
+          {modelPieData.length === 0 ? (
+            <div className="h-full flex items-center justify-center text-xs text-muted-foreground">
+              暂无模型请求数据
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={modelPieData}
+                  cx="50%"
+                  cy="44%"
+                  innerRadius={40}
+                  outerRadius={68}
+                  paddingAngle={3}
+                  dataKey="count"
+                  nameKey="model"
+                  className="cursor-pointer"
+                  isAnimationActive={false}
+                  onClick={(data: any) => data?.model && toggleModelFilter(data.model)}
+                >
+                  {modelPieData.map((_, index) => (
+                    <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+                  ))}
+                </Pie>
+                <Tooltip contentStyle={tooltipStyle} />
+                <Legend
+                  verticalAlign="bottom"
+                  align="center"
+                  wrapperStyle={{ fontSize: '10px', paddingTop: '4px' }}
+                  formatter={(value: string) => (
+                    <span className="text-foreground truncate inline-block max-w-[115px] align-bottom" title={value}>
+                      {value}
+                    </span>
+                  )}
+                />
+              </PieChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+      </div>
+
+      <div className="lg:col-span-3 bg-card border border-border/80 rounded-2xl p-3.5 sm:p-5 shadow-sm min-w-0 overflow-hidden">
+        <h3 className="text-sm font-bold text-foreground mb-4 flex items-center gap-2">
+          <Server className="w-4 h-4 text-purple-500 shrink-0" />
+          接口访问分布 (Endpoint)
+        </h3>
+        <div className="h-60 min-w-0">
+          {formattedEndpointStats.length === 0 ? (
+            <div className="h-full flex items-center justify-center text-xs text-muted-foreground">
+              暂无接口数据
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={formattedEndpointStats}
+                  cx="50%"
+                  cy="44%"
+                  innerRadius={36}
+                  outerRadius={66}
+                  paddingAngle={2}
+                  dataKey="value"
+                  nameKey="name"
+                  isAnimationActive={false}
+                  label={({ percent }) => `${(percent * 100).toFixed(0)}%`}
+                  labelLine={false}
+                >
+                  {formattedEndpointStats.map((_, index) => (
+                    <Cell key={`cell-${index}`} fill={CHART_COLORS[(index + 2) % CHART_COLORS.length]} />
+                  ))}
+                </Pie>
+                <Tooltip contentStyle={tooltipStyle} />
+                <Legend
+                  verticalAlign="bottom"
+                  wrapperStyle={{ fontSize: '10px' }}
+                  formatter={(value: string) => (
+                    <span className="text-muted-foreground truncate inline-block max-w-[110px] align-bottom" title={value}>
+                      {value}
+                    </span>
+                  )}
+                />
+              </PieChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+});
+
 export default function Dashboard() {
   const { token } = useAuthStore();
 
@@ -768,10 +1810,9 @@ export default function Dashboard() {
   // 是否展开双图并排视图（左边所选时序 + 右边分模型/缓存堆叠对比）
   const [dualChartCompare, setDualChartCompare] = useState(false);
 
-  // 底部明细表 Tab、搜索与展开控制
-  const [breakdownTab, setBreakdownTab] = useState<'cross' | 'key' | 'key_model' | 'model' | 'provider'>('cross');
-  const [tableSearch, setTableSearch] = useState('');
-  const [showAllBreakdownRows, setShowAllBreakdownRows] = useState(false);
+  // 底部明细表初始跳转到指定 Tab 的信号
+  const [breakdownInitialTab, setBreakdownInitialTab] = useState<'cross' | 'key' | 'key_model' | 'model' | 'provider'>('cross');
+  const [breakdownJumpSeq, setBreakdownJumpSeq] = useState(0);
 
   // 后端数据状态
   const [loading, setLoading] = useState(true);
@@ -927,32 +1968,32 @@ export default function Dashboard() {
     }
   }, []);
 
-  const toggleModelFilter = (modelName: string) => {
+  const toggleModelFilter = useCallback((modelName: string) => {
     setSelectedModels(prev =>
       prev.includes(modelName) ? prev.filter(m => m !== modelName) : [...prev, modelName]
     );
-  };
+  }, []);
 
-  const toggleProviderFilter = (provName: string) => {
+  const toggleProviderFilter = useCallback((provName: string) => {
     setSelectedProviders(prev =>
       prev.includes(provName) ? prev.filter(p => p !== provName) : [...prev, provName]
     );
-  };
+  }, []);
 
-  const toggleKeyFilter = (keyHash: string) => {
+  const toggleKeyFilter = useCallback((keyHash: string) => {
     if (!keyHash) return;
     setSelectedKeys(prev =>
       prev.includes(keyHash) ? prev.filter(k => k !== keyHash) : [...prev, keyHash]
     );
-  };
+  }, []);
 
-  const clearAllFilters = () => {
+  const clearAllFilters = useCallback(() => {
     setSelectedModels([]);
     setSelectedProviders([]);
     setSelectedKeys([]);
     setCustomStart('');
     setCustomEnd('');
-  };
+  }, []);
 
   const activeFilterCount =
     selectedModels.length +
@@ -1049,69 +2090,26 @@ export default function Dashboard() {
     };
   }, [summary]);
 
-  // 建立渠道快速检索映射（在渠道健康表上附加缓存率、Token、速度、成本）
-  const providerExtraMap = useMemo(() => {
-    const map = new Map<string, BreakdownRow>();
-    providerBreakdown.forEach(p => {
-      if (p.provider) map.set(p.provider, p);
+  // 建立渠道快速检索映射（在按渠道汇总明细表上融合 channel_stats 真实尝试成功率）
+  const channelAttemptMap = useMemo(() => {
+    const map = new Map<string, { success_rate: number; total_requests: number }>();
+    channelStats.forEach(c => {
+      if (c.provider) map.set(c.provider, c);
     });
     return map;
-  }, [providerBreakdown]);
+  }, [channelStats]);
 
-  // 搜索过滤后的底部明细表数据
-  const filteredCrossRows = useMemo(() => {
-    const q = tableSearch.trim().toLowerCase();
-    if (!q) return crossBreakdown;
-    return crossBreakdown.filter(
-      r => r.provider.toLowerCase().includes(q) || r.model.toLowerCase().includes(q)
-    );
-  }, [crossBreakdown, tableSearch]);
-
-  const filteredModelRows = useMemo(() => {
-    const q = tableSearch.trim().toLowerCase();
-    if (!q) return modelBreakdown;
-    return modelBreakdown.filter(r => (r.model || '').toLowerCase().includes(q));
-  }, [modelBreakdown, tableSearch]);
-
-  const filteredProviderRows = useMemo(() => {
-    const q = tableSearch.trim().toLowerCase();
-    if (!q) return providerBreakdown;
-    return providerBreakdown.filter(r => (r.provider || '').toLowerCase().includes(q));
-  }, [providerBreakdown, tableSearch]);
-
-  const filteredKeyRows = useMemo(() => {
-    const q = tableSearch.trim().toLowerCase();
-    if (!q) return keyBreakdown;
-    return keyBreakdown.filter(
-      r =>
-        r.key_label.toLowerCase().includes(q) ||
-        r.api_key_prefix.toLowerCase().includes(q) ||
-        (r.api_key_group || '').toLowerCase().includes(q) ||
-        (r.parent_name || '').toLowerCase().includes(q) ||
-        (r.top_model || '').toLowerCase().includes(q)
-    );
-  }, [keyBreakdown, tableSearch]);
-
-  const filteredKeyModelRows = useMemo(() => {
-    const q = tableSearch.trim().toLowerCase();
-    if (!q) return keyModelBreakdown;
-    return keyModelBreakdown.filter(
-      r =>
-        r.key_label.toLowerCase().includes(q) ||
-        r.api_key_prefix.toLowerCase().includes(q) ||
-        (r.api_key_group || '').toLowerCase().includes(q) ||
-        r.model.toLowerCase().includes(q)
-    );
-  }, [keyModelBreakdown, tableSearch]);
-
-  const tooltipStyle = {
-    backgroundColor: 'hsl(var(--popover))',
-    borderColor: 'hsl(var(--border))',
-    color: 'hsl(var(--popover-foreground))',
-    borderRadius: '10px',
-    fontSize: '12px',
-    boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.4)',
-  };
+  const tooltipStyle = useMemo(
+    () => ({
+      backgroundColor: 'hsl(var(--popover))',
+      borderColor: 'hsl(var(--border))',
+      color: 'hsl(var(--popover-foreground))',
+      borderRadius: '10px',
+      fontSize: '12px',
+      boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.4)',
+    }),
+    []
+  );
 
   if (loading && !summary && !stats) {
     return (
@@ -1529,225 +2527,21 @@ export default function Dashboard() {
           2. 核心 6 指标卡片矩阵 + 主时序图 & 实时活动流
          ===================================================================== */}
       <div id="section-overview" className="space-y-4 min-w-0">
-        <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-2.5 sm:gap-3.5 min-w-0">
-          {/* Card 1: TOKEN 消耗 */}
-          <div className="relative bg-card border border-border/80 rounded-2xl p-3 sm:p-4 shadow-sm overflow-hidden flex flex-col justify-between min-h-[172px] sm:min-h-[212px] min-w-0">
-            <div className="absolute left-0 top-3 bottom-3 w-1 rounded-r-full bg-gradient-to-b from-indigo-500 via-purple-500 to-amber-500" />
-            <div className="min-w-0">
-              <div className="flex items-center justify-between gap-1 text-[11px] sm:text-xs font-medium text-muted-foreground">
-                <span className="inline-flex items-center gap-1 sm:gap-1.5 truncate">
-                  <span className="text-indigo-400">◆</span>
-                  <span className="truncate">TOKEN 消耗</span>
-                </span>
-                {selectedModels.length === 1 && (
-                  <span className="text-[10px] text-primary truncate max-w-[65px] sm:max-w-[90px]" title={selectedModels[0]}>
-                    {selectedModels[0]}
-                  </span>
-                )}
-              </div>
-              <div className="mt-1.5 sm:mt-2 text-2xl sm:text-3xl font-bold tracking-tight tabular-nums text-foreground truncate">
-                {formatTokens(summary?.total_tokens || 0)}
-              </div>
-              <div className="mt-1.5 sm:mt-2 space-y-0.5 sm:space-y-1 text-[10px] sm:text-[11px] text-muted-foreground tabular-nums leading-snug">
-                <div className="flex flex-wrap items-center gap-x-1">
-                  <span>输入 <strong className="font-semibold text-foreground/90">{formatTokens(summary?.prompt_tokens || 0)}</strong></span>
-                  <span>·</span>
-                  <span>输出 <strong className="font-semibold text-foreground/90">{formatTokens(summary?.completion_tokens || 0)}</strong></span>
-                </div>
-                <div className="flex flex-wrap items-center gap-x-1">
-                  <span>未命中 <strong className="font-semibold text-foreground/90">{formatTokens(summary?.uncached_tokens || 0)}</strong></span>
-                  <span>·</span>
-                  <span>缓存 <strong className="font-semibold text-foreground/90">{formatTokens(summary?.cached_tokens || 0)}</strong></span>
-                </div>
-              </div>
-              <div className="mt-2 sm:mt-2.5 flex items-center gap-1">
-                <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden flex">
-                  <div
-                    className="h-full bg-slate-300 dark:bg-slate-200 transition-all duration-500"
-                    style={{ width: `${tokenSegments.cachedPct}%` }}
-                    title={`缓存命中: ${tokenSegments.cachedPct.toFixed(1)}%`}
-                  />
-                  <div
-                    className="h-full bg-amber-500 transition-all duration-500"
-                    style={{ width: `${tokenSegments.uncachedPct}%` }}
-                    title={`未缓存输入: ${tokenSegments.uncachedPct.toFixed(1)}%`}
-                  />
-                  <div
-                    className="h-full bg-emerald-500 transition-all duration-500"
-                    style={{ width: `${tokenSegments.compPct}%` }}
-                    title={`输出 Token: ${tokenSegments.compPct.toFixed(1)}%`}
-                  />
-                </div>
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
-              </div>
-            </div>
-            <div className="mt-2 sm:mt-2.5 pt-1">
-              <MiniSparkline values={tokenSeries} strokeColor="#e07a5f" gradientId="spark-token" />
-            </div>
-          </div>
-
-          {/* Card 2: 请求数 */}
-          <div className="bg-card border border-border/80 rounded-2xl p-3 sm:p-4 shadow-sm overflow-hidden flex flex-col justify-between min-h-[172px] sm:min-h-[212px] min-w-0">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center justify-between gap-1 text-[11px] sm:text-xs font-medium text-muted-foreground">
-                <span className="inline-flex items-center gap-1 sm:gap-1.5 shrink-0">
-                  <span className="text-sky-400">⇄</span>
-                  <span>请求数</span>
-                </span>
-                <div className="inline-flex items-center gap-1 flex-wrap">
-                  <button
-                    type="button"
-                    onClick={() => scrollToSection('section-key-usage')}
-                    title="点击跳转到 Key 用量排行"
-                    className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 text-[10px] transition-colors whitespace-nowrap"
-                  >
-                    Key {summary?.active_keys ?? keyBreakdown.length}
-                  </button>
-                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-purple-500/10 text-purple-400 text-[10px] whitespace-nowrap">
-                    渠道 {providerBreakdown.length}
-                  </span>
-                </div>
-              </div>
-              <div className="mt-1.5 sm:mt-2 flex items-baseline gap-1 min-w-0">
-                <span className="text-2xl sm:text-3xl font-bold tracking-tight tabular-nums text-foreground truncate">
-                  {(summary?.total_requests || 0).toLocaleString()}
-                </span>
-                <span className="text-xs text-muted-foreground shrink-0">次</span>
-              </div>
-              <div className="mt-1.5 sm:mt-2 text-[10px] sm:text-[11px] text-muted-foreground tabular-nums leading-snug flex flex-wrap items-center gap-x-1">
-                <span>失败 <strong className="font-semibold text-foreground/90">{(summary?.failed_requests || 0).toLocaleString()}</strong></span>
-                <span>·</span>
-                <span>成功率 <strong className="font-semibold text-foreground/90">{(summary?.success_rate || 0).toFixed(1)}%</strong></span>
-              </div>
-            </div>
-            <div className="mt-2 sm:mt-2.5 pt-1">
-              <MiniSparkline values={reqSeries} strokeColor="#6488ea" gradientId="spark-req" />
-            </div>
-          </div>
-
-          {/* Card 3: 生成速度 */}
-          <div className="bg-card border border-border/80 rounded-2xl p-3 sm:p-4 shadow-sm overflow-hidden flex flex-col justify-between min-h-[172px] sm:min-h-[212px] min-w-0">
-            <div className="min-w-0">
-              <div className="flex items-center gap-1 sm:gap-1.5 text-[11px] sm:text-xs font-medium text-muted-foreground">
-                <span className="text-amber-400">⚡</span>
-                <span className="truncate">生成速度</span>
-              </div>
-              <div className="mt-1.5 sm:mt-2 flex items-baseline gap-1 min-w-0">
-                <span className="text-2xl sm:text-3xl font-bold tracking-tight tabular-nums text-foreground truncate">
-                  {(summary?.avg_speed_tok_s || 0).toFixed(1)}
-                </span>
-                <span className="text-xs text-muted-foreground shrink-0">tok/s</span>
-              </div>
-              <div className="mt-1.5 sm:mt-2 space-y-0.5 sm:space-y-1 text-[10px] sm:text-[11px] text-muted-foreground tabular-nums leading-snug">
-                <div className="flex flex-wrap items-center gap-x-1">
-                  <span>耗时 <strong className="font-semibold text-foreground/90">{(summary?.avg_process_time || 0).toFixed(2)}s</strong></span>
-                  <span>·</span>
-                  <span>首字 <strong className="font-semibold text-foreground/90">{(summary?.avg_first_response_time || 0).toFixed(2)}s</strong></span>
-                </div>
-                <div className="flex flex-wrap items-center gap-x-1">
-                  <span>峰值 <strong className="font-semibold text-foreground/90">{Math.round(summary?.peak_speed_tok_s || 0)}</strong></span>
-                  <span>·</span>
-                  <span>p90 <strong className="font-semibold text-foreground/90">{(summary?.p90_first_response_time || 0).toFixed(2)}s</strong></span>
-                </div>
-              </div>
-            </div>
-            <div className="mt-2 sm:mt-2.5 pt-1">
-              <MiniSparkline values={speedSeries} strokeColor="#e07a5f" gradientId="spark-speed" />
-            </div>
-          </div>
-
-          {/* Card 4: 缓存命中率（支持单模型精准展示 & 多模型独立命中率迷你排行） */}
-          <div className="bg-card border border-border/80 rounded-2xl p-3 sm:p-4 shadow-sm overflow-hidden flex flex-col justify-between min-h-[172px] sm:min-h-[212px] min-w-0">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center justify-between gap-1 text-[11px] sm:text-xs font-medium text-muted-foreground">
-                <span className="inline-flex items-center gap-1 sm:gap-1.5 shrink-0">
-                  <span className="text-cyan-400">♻</span>
-                  <span>缓存命中率</span>
-                </span>
-                <span className="text-[10px] text-cyan-400 font-medium hidden sm:inline">
-                  {selectedModels.length === 1
-                    ? '单模型精确'
-                    : selectedModels.length > 1
-                    ? `已选 ${selectedModels.length} 模型`
-                    : '点击模型可单看'}
-                </span>
-              </div>
-              <div className="mt-1.5 sm:mt-2 text-2xl sm:text-3xl font-bold tracking-tight tabular-nums text-foreground truncate">
-                {(summary?.cache_hit_rate || 0).toFixed(1)}%
-              </div>
-              <div className="mt-1 sm:mt-1.5 text-[10px] sm:text-[11px] text-muted-foreground tabular-nums leading-snug">
-                缓存复用 <span className="font-semibold text-foreground/90">{formatTokens(summary?.cached_tokens || 0)}</span> tok
-              </div>
-
-              {/* 当处于「全部模型」时，直接列出 Top 模型的各自独立缓存命中率，点击任意一行立刻只看该模型 */}
-              {selectedModels.length === 0 && modelBreakdown.length > 0 && (
-                <div className="mt-1.5 sm:mt-2 space-y-1 border-t border-border/50 pt-1.5">
-                  {modelBreakdown.slice(0, 2).map(m => (
-                    <button
-                      key={m.model}
-                      type="button"
-                      onClick={() => m.model && toggleModelFilter(m.model)}
-                      className="w-full flex items-center justify-between gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors tabular-nums min-w-0"
-                      title={`点击只看 ${m.model} 的缓存与速度`}
-                    >
-                      <span className="truncate flex-1 text-left">{m.model}</span>
-                      <span className="font-semibold text-cyan-400 shrink-0">{m.cache_hit_rate.toFixed(1)}%</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="mt-2 pt-0.5">
-              <MiniSparkline values={cacheRateSeries} strokeColor="#6488ea" gradientId="spark-cache" />
-            </div>
-          </div>
-
-          {/* Card 5: API 等价 / 费用 */}
-          <div className="bg-card border border-border/80 rounded-2xl p-3 sm:p-4 shadow-sm overflow-hidden flex flex-col justify-between min-h-[172px] sm:min-h-[212px] min-w-0">
-            <div className="min-w-0">
-              <div className="flex items-center gap-1 sm:gap-1.5 text-[11px] sm:text-xs font-medium text-muted-foreground">
-                <span className="text-rose-400">¥</span>
-                <span className="truncate">API 等价 / 费用</span>
-              </div>
-              <div className="mt-1.5 sm:mt-2 text-2xl sm:text-3xl font-bold tracking-tight tabular-nums text-rose-400 truncate">
-                ¥ {(summary?.total_cost_cny || 0).toFixed(2)}
-              </div>
-              <div className="mt-1.5 sm:mt-2 space-y-0.5 sm:space-y-1 text-[10px] sm:text-[11px] text-muted-foreground tabular-nums leading-snug">
-                <div className="flex flex-wrap items-center gap-x-1">
-                  <span>折合 <strong className="text-emerald-400 font-semibold">${(summary?.total_cost_usd || 0).toFixed(2)}</strong></span>
-                  <span>·</span>
-                  <span>实记 <strong className="font-semibold text-foreground/90">${(summary?.recorded_cost_usd || 0).toFixed(2)}</strong></span>
-                </div>
-                <div>
-                  单次均价 ¥
-                  {summary && summary.total_requests > 0
-                    ? (summary.total_cost_cny / summary.total_requests).toFixed(3)
-                    : '0.000'}
-                </div>
-              </div>
-            </div>
-            <div className="mt-2 sm:mt-2.5 pt-1">
-              <MiniSparkline values={costSeries} strokeColor="#e07a5f" gradientId="spark-cost" />
-            </div>
-          </div>
-
-          {/* Card 6: 请求成功率 */}
-          <div className="bg-card border border-border/80 rounded-2xl p-3 sm:p-4 shadow-sm overflow-hidden flex flex-col justify-between min-h-[172px] sm:min-h-[212px] min-w-0">
-            <div className="flex items-center gap-1 sm:gap-1.5 text-[11px] sm:text-xs font-medium text-muted-foreground">
-              <span className="text-emerald-400">✓</span>
-              <span className="truncate">请求成功率</span>
-            </div>
-            <SuccessDonutGauge
-              rate={summary?.success_rate || 0}
-              total={summary?.total_requests || 0}
-            />
-            <div className="text-center text-[10px] sm:text-[11px] text-muted-foreground tabular-nums truncate">
-              {(summary?.total_requests || 0).toLocaleString()} 次 · 失败{' '}
-              <span className="font-semibold text-foreground/90">{(summary?.failed_requests || 0).toLocaleString()}</span> 次
-            </div>
-          </div>
-        </div>
+        <KpiOverviewCards
+          summary={summary}
+          selectedModels={selectedModels}
+          keyCount={keyBreakdown.length}
+          providerCount={providerBreakdown.length}
+          modelBreakdown={modelBreakdown}
+          tokenSegments={tokenSegments}
+          tokenSeries={tokenSeries}
+          reqSeries={reqSeries}
+          speedSeries={speedSeries}
+          cacheRateSeries={cacheRateSeries}
+          costSeries={costSeries}
+          scrollToSection={scrollToSection}
+          toggleModelFilter={toggleModelFilter}
+        />
 
         {/* 中部双栏：五合一主时序面板 + 最近请求实时活动流 */}
         <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 min-w-0">
@@ -2181,1025 +2975,181 @@ export default function Dashboard() {
       </div>
 
       {/* =====================================================================
-          2.5 API Key 用量排行与明细看板（查看哪条 Key 用量最多、Token/费用占比、缓存命中与一键下钻）
+          2.5 API Key 用量排行（Top Key 卡片矩阵；完整表格在下方「用量明细 -> 按 Key 汇总」）
          ===================================================================== */}
       <div
         id="section-key-usage"
-        style={{ contentVisibility: 'auto', containIntrinsicSize: '0 360px' }}
-        className="bg-card border border-border/80 rounded-2xl p-3.5 sm:p-5 shadow-sm space-y-4 min-w-0 overflow-hidden"
+        style={{ contentVisibility: 'auto', containIntrinsicSize: '0 220px' }}
+        className="bg-card border border-border/80 rounded-2xl p-3.5 sm:p-5 shadow-sm space-y-3.5 min-w-0 overflow-hidden"
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2 flex-wrap">
             <KeyRound className="w-4 h-4 text-amber-400 shrink-0" />
             <h3 className="text-sm font-bold text-foreground">API Key 用量排行</h3>
             <span className="text-xs text-muted-foreground">
-              （共 {keyBreakdown.length} 条活跃 Key · 点击任意 Key 联动筛选，点击「深度分析」查看 IP 与配额）
+              （共 {keyBreakdown.length} 条活跃 Key · 点击卡片联动全页筛选，点击「分析」查看 IP 与配额）
             </span>
           </div>
-          {selectedKeys.length > 0 && (
-            <button
-              type="button"
-              onClick={() => setSelectedKeys([])}
-              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded-lg transition-colors"
-            >
-              <X className="w-3 h-3" />
-              取消 Key 过滤 ({selectedKeys.length})
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            {selectedKeys.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setSelectedKeys([])}
+                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded-lg transition-colors"
+              >
+                <X className="w-3 h-3" />
+                取消 Key 过滤 ({selectedKeys.length})
+              </button>
+            )}
+            {keyBreakdown.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setBreakdownInitialTab('key');
+                  setBreakdownJumpSeq(s => s + 1);
+                  scrollToSection('section-breakdown');
+                }}
+                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-muted-foreground hover:text-foreground bg-muted/40 hover:bg-muted/70 border border-border/70 rounded-lg transition-colors"
+              >
+                查看全部 Key 明细表 ({keyBreakdown.length})
+              </button>
+            )}
+          </div>
         </div>
 
         {keyBreakdown.length === 0 ? (
-          <div className="py-10 text-center text-xs text-muted-foreground border border-dashed border-border/60 rounded-xl">
+          <div className="py-8 text-center text-xs text-muted-foreground border border-dashed border-border/60 rounded-xl">
             当前时间范围与筛选条件下暂无 API Key 用量记录
           </div>
         ) : (
-          <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 items-start min-w-0">
-            {/* 左栏：Top Key Token & 费用占比可视化卡片 */}
-            <div className="xl:col-span-5 bg-muted/20 border border-border/60 rounded-xl p-3 sm:p-4 space-y-3 min-w-0">
-              <div className="flex flex-wrap items-center justify-between gap-1 text-xs">
-                <span className="font-semibold text-foreground">Top Key 消耗占比</span>
-                <span className="text-muted-foreground tabular-nums">
-                  总计 {formatTokens(summary?.total_tokens || 0)} tok · ¥{(summary?.total_cost_cny || 0).toFixed(2)}
-                </span>
-              </div>
-              <div className="space-y-2.5">
-                {keyBreakdown.slice(0, 6).map((k, idx) => {
-                  const isSelected = selectedKeys.includes(k.key_hash);
-                  return (
-                    <div
-                      key={k.key_hash}
-                      onClick={() => toggleKeyFilter(k.key_hash)}
-                      className={`p-2.5 rounded-xl border transition-all cursor-pointer min-w-0 ${
-                        isSelected
-                          ? 'bg-amber-500/10 border-amber-500/50 shadow-sm'
-                          : 'bg-card/80 border-border/60 hover:border-border'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-2 text-xs min-w-0">
-                        <div className="flex items-center gap-1.5 flex-wrap min-w-0 flex-1">
-                          <span
-                            className="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold text-white shrink-0"
-                            style={{ backgroundColor: LINE_COLORS[idx % LINE_COLORS.length] }}
-                          >
-                            {idx + 1}
-                          </span>
-                          <span className="font-semibold text-foreground truncate max-w-[140px] sm:max-w-[180px]" title={k.key_label}>
-                            {k.key_label}
-                          </span>
-                          {k.api_key_name && (
-                            <span className="text-[10px] font-mono text-muted-foreground shrink-0">
-                              ({k.api_key_prefix})
-                            </span>
-                          )}
-                          {k.api_key_group && (
-                            <span className="px-1.5 py-0.2 rounded bg-muted text-muted-foreground text-[10px] shrink-0">
-                              {k.api_key_group}
-                            </span>
-                          )}
-                          {k.parent_name && (
-                            <span
-                              className="px-1.5 py-0.2 rounded bg-purple-500/10 text-purple-400 text-[10px] shrink-0"
-                              title={`子 Key，继承自母 Key: ${k.parent_name}`}
-                            >
-                              母:{k.parent_name}
-                            </span>
-                          )}
-                        </div>
-                        <div className="shrink-0 font-mono text-xs tabular-nums flex items-center gap-1.5">
-                          <span>
-                            <span className="font-bold text-foreground">{formatTokens(k.total_tokens)}</span>
-                            <span className="text-muted-foreground ml-0.5">({k.token_share.toFixed(1)}%)</span>
-                          </span>
-                          {k.can_drilldown && (
-                            <button
-                              type="button"
-                              onClick={e => {
-                                e.stopPropagation();
-                                setAnalyticsTargetKey({
-                                  key_hash: k.key_hash,
-                                  key_label: k.key_label,
-                                });
-                              }}
-                              className="xl:hidden px-1.5 py-0.5 text-[10px] font-sans font-medium rounded bg-primary/10 text-primary border border-primary/30 whitespace-nowrap"
-                            >
-                              分析
-                            </button>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="mt-2 h-1.5 w-full bg-muted rounded-full overflow-hidden">
-                        <div
-                          className="h-full rounded-full transition-all duration-500"
-                          style={{
-                            width: `${Math.max(2, Math.min(100, k.token_share))}%`,
-                            backgroundColor: LINE_COLORS[idx % LINE_COLORS.length],
-                          }}
-                        />
-                      </div>
-
-                      <div className="mt-1.5 flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[11px] text-muted-foreground tabular-nums">
-                        <span className="min-w-0 break-all sm:break-normal">
-                          请求 <strong className="text-foreground/90">{k.requests.toLocaleString()}</strong> 次 · 缓存{' '}
-                          <strong className="text-cyan-400">{k.cache_hit_rate.toFixed(1)}%</strong> · 主力{' '}
-                          <strong className="text-foreground/90">{k.top_model}</strong>
-                        </span>
-                        <span className="font-mono text-rose-400 font-semibold shrink-0">
-                          ¥{k.cost_cny.toFixed(2)} (${k.cost_usd.toFixed(2)})
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* 右栏：Key 用量速览与下钻表 */}
-            <div className="xl:col-span-7 overflow-x-auto border border-border/70 rounded-xl min-w-0 w-full">
-              <table className="w-full min-w-[680px] text-left text-xs whitespace-nowrap">
-                <thead className="bg-muted/60 text-muted-foreground font-medium">
-                  <tr>
-                    <th className="px-3.5 py-2.5">API Key 标识</th>
-                    <th className="px-3.5 py-2.5 text-right">请求数</th>
-                    <th className="px-3.5 py-2.5 text-right">成功率</th>
-                    <th className="px-3.5 py-2.5 text-right">输入 / 输出</th>
-                    <th className="px-3.5 py-2.5 text-right">缓存命中率</th>
-                    <th className="px-3.5 py-2.5 text-right">总 Token</th>
-                    <th className="px-3.5 py-2.5 text-right">等价费用</th>
-                    <th className="px-3.5 py-2.5 text-right">操作</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border/50 tabular-nums">
-                  {keyBreakdown.slice(0, 10).map(row => {
-                    const isSelected = selectedKeys.includes(row.key_hash);
-                    return (
-                      <tr
-                        key={row.key_hash}
-                        onClick={() => toggleKeyFilter(row.key_hash)}
-                        className={`cursor-pointer transition-colors ${
-                          isSelected ? 'bg-amber-500/10' : 'hover:bg-muted/30'
-                        }`}
-                        title="点击按该 Key 联动筛选全页"
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 min-w-0">
+            {keyBreakdown.slice(0, 6).map((k, idx) => {
+              const isSelected = selectedKeys.includes(k.key_hash);
+              return (
+                <div
+                  key={k.key_hash}
+                  onClick={() => toggleKeyFilter(k.key_hash)}
+                  className={`p-3 rounded-xl border transition-colors cursor-pointer min-w-0 ${
+                    isSelected
+                      ? 'bg-amber-500/10 border-amber-500/50 shadow-sm'
+                      : 'bg-muted/20 border-border/60 hover:border-border'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2 text-xs min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap min-w-0 flex-1">
+                      <span
+                        className="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold text-white shrink-0"
+                        style={{ backgroundColor: LINE_COLORS[idx % LINE_COLORS.length] }}
                       >
-                        <td className="px-3.5 py-2.5">
-                          <div className="flex items-center gap-1.5">
-                            <KeyRound className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                            <div>
-                              <div className="font-semibold text-foreground flex items-center gap-1.5">
-                                <span>{row.key_label}</span>
-                                {row.api_key_group && (
-                                  <span className="px-1.5 py-0.2 rounded bg-muted text-muted-foreground text-[10px] font-normal">
-                                    {row.api_key_group}
-                                  </span>
-                                )}
-                              </div>
-                              <div className="text-[10px] text-muted-foreground font-mono">
-                                {row.api_key_prefix}
-                                {row.top_model && row.top_model !== '-' ? ` · ${row.top_model}` : ''}
-                              </div>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="px-3.5 py-2.5 text-right text-foreground font-medium">
-                          {row.requests.toLocaleString()}
-                        </td>
-                        <td className="px-3.5 py-2.5 text-right">
-                          <span
-                            className={`font-semibold ${
-                              row.success_rate >= 95
-                                ? 'text-emerald-400'
-                                : row.success_rate >= 80
-                                ? 'text-amber-400'
-                                : 'text-rose-400'
-                            }`}
-                          >
-                            {row.success_rate.toFixed(1)}%
-                          </span>
-                        </td>
-                        <td className="px-3.5 py-2.5 text-right text-muted-foreground">
-                          {formatTokens(row.prompt_tokens)} / {formatTokens(row.completion_tokens)}
-                        </td>
-                        <td className="px-3.5 py-2.5 text-right">
-                          <span className="text-cyan-400 font-semibold">{row.cache_hit_rate.toFixed(1)}%</span>
-                        </td>
-                        <td className="px-3.5 py-2.5 text-right font-mono font-bold text-foreground">
-                          {formatTokens(row.total_tokens)}
-                        </td>
-                        <td className="px-3.5 py-2.5 text-right font-mono text-rose-400 font-semibold">
-                          ¥{row.cost_cny.toFixed(2)}
-                        </td>
-                        <td
-                          className="px-3.5 py-2.5 text-right"
-                          onClick={e => e.stopPropagation()}
+                        {idx + 1}
+                      </span>
+                      <span className="font-semibold text-foreground truncate max-w-[140px] sm:max-w-[170px]" title={k.key_label}>
+                        {k.key_label}
+                      </span>
+                      {k.api_key_name && (
+                        <span className="text-[10px] font-mono text-muted-foreground shrink-0">
+                          ({k.api_key_prefix})
+                        </span>
+                      )}
+                      {k.api_key_group && (
+                        <span className="px-1.5 py-0.2 rounded bg-muted text-muted-foreground text-[10px] shrink-0">
+                          {k.api_key_group}
+                        </span>
+                      )}
+                      {k.parent_name && (
+                        <span
+                          className="px-1.5 py-0.2 rounded bg-purple-500/10 text-purple-400 text-[10px] shrink-0"
+                          title={`子 Key，继承自母 Key: ${k.parent_name}`}
                         >
-                          {row.can_drilldown ? (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setAnalyticsTargetKey({
-                                  key_hash: row.key_hash,
-                                  key_label: row.key_label,
-                                })
-                              }
-                              className="px-2 py-1 text-[11px] font-medium rounded-md bg-primary/10 text-primary hover:bg-primary/20 border border-primary/30 transition-colors whitespace-nowrap"
-                            >
-                              深度分析
-                            </button>
-                          ) : (
-                            <span className="text-[11px] text-muted-foreground">—</span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                          母:{k.parent_name}
+                        </span>
+                      )}
+                    </div>
+                    <div className="shrink-0 font-mono text-xs tabular-nums flex items-center gap-1.5">
+                      <span>
+                        <span className="font-bold text-foreground">{formatTokens(k.total_tokens)}</span>
+                        <span className="text-muted-foreground ml-0.5">({k.token_share.toFixed(1)}%)</span>
+                      </span>
+                      {k.can_drilldown && (
+                        <button
+                          type="button"
+                          onClick={e => {
+                            e.stopPropagation();
+                            setAnalyticsTargetKey({
+                              key_hash: k.key_hash,
+                              key_label: k.key_label,
+                            });
+                          }}
+                          className="px-1.5 py-0.5 text-[10px] font-sans font-medium rounded bg-primary/10 text-primary hover:bg-primary/20 border border-primary/30 whitespace-nowrap"
+                        >
+                          分析
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-2 h-1.5 w-full bg-muted rounded-full overflow-hidden">
+                    <div
+                      className="h-full rounded-full"
+                      style={{
+                        width: `${Math.max(2, Math.min(100, k.token_share))}%`,
+                        backgroundColor: LINE_COLORS[idx % LINE_COLORS.length],
+                      }}
+                    />
+                  </div>
+
+                  <div className="mt-1.5 flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[11px] text-muted-foreground tabular-nums">
+                    <span className="min-w-0 break-all sm:break-normal">
+                      请求 <strong className="text-foreground/90">{k.requests.toLocaleString()}</strong> · 缓存{' '}
+                      <strong className="text-cyan-400">{k.cache_hit_rate.toFixed(1)}%</strong> · 主力{' '}
+                      <strong className="text-foreground/90">{k.top_model}</strong>
+                    </span>
+                    <span className="font-mono text-rose-400 font-semibold shrink-0">
+                      ¥{k.cost_cny.toFixed(2)} (${k.cost_usd.toFixed(2)})
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
 
       {/* =====================================================================
-          3. 渠道与模型分布三联图（原版经典 3 图同屏：渠道成功率 + 模型分布 + Endpoint 分布）
+          3. 渠道与模型分布三联图（memo 隔离，切换时序图模式或搜索明细表时零重绘）
          ===================================================================== */}
-      <div
-        id="section-distributions"
-        style={{ contentVisibility: 'auto', containIntrinsicSize: '0 300px' }}
-        className="grid grid-cols-1 lg:grid-cols-12 gap-4 min-w-0"
-      >
-        {/* 渠道成功率 (%) */}
-        <div className="lg:col-span-5 bg-card border border-border/80 rounded-2xl p-3.5 sm:p-5 shadow-sm min-w-0 overflow-hidden">
-          <div className="flex items-center justify-between gap-2 mb-4">
-            <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
-              <Cpu className="w-4 h-4 text-emerald-500 shrink-0" />
-              渠道成功率 (%)
-            </h3>
-            <span className="text-[11px] text-muted-foreground">点击柱子可筛选渠道</span>
-          </div>
-          <div className="h-56 sm:h-60 min-w-0">
-            {formattedChannelStats.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-xs text-muted-foreground">
-                暂无渠道数据
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={formattedChannelStats} margin={{ top: 0, right: 0, left: -12, bottom: 0 }}>
-                  <XAxis dataKey="name" stroke={AXIS_COLOR} fontSize={11} tickLine={false} axisLine={false} />
-                  <YAxis stroke={AXIS_COLOR} fontSize={11} tickLine={false} axisLine={false} domain={[0, 100]} />
-                  <Tooltip
-                    cursor={{ fill: 'hsl(var(--muted) / 0.5)' }}
-                    contentStyle={tooltipStyle}
-                    formatter={(value: number) => [`${value.toFixed(1)}%`, '成功率']}
-                  />
-                  <Bar
-                    dataKey="success_rate"
-                    name="成功率"
-                    radius={[4, 4, 0, 0]}
-                    className="cursor-pointer"
-                    isAnimationActive={false}
-                    onClick={(data: any) => data?.name && toggleProviderFilter(data.name)}
-                  >
-                    {formattedChannelStats.map((entry, index) => (
-                      <Cell
-                        key={`cell-${index}`}
-                        fill={
-                          entry.success_rate >= 95
-                            ? SUCCESS_COLOR
-                            : entry.success_rate >= 80
-                            ? WARNING_COLOR
-                            : ERROR_COLOR
-                        }
-                      />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-        </div>
-
-        {/* 模型请求量分布 */}
-        <div className="lg:col-span-4 bg-card border border-border/80 rounded-2xl p-3.5 sm:p-5 shadow-sm min-w-0 overflow-hidden">
-          <div className="flex items-center justify-between gap-2 mb-4">
-            <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
-              <Activity className="w-4 h-4 text-blue-500 shrink-0" />
-              模型请求量分布
-            </h3>
-            <span className="text-[11px] text-muted-foreground">点击扇区可筛选模型</span>
-          </div>
-          <div className="h-60 min-w-0">
-            {modelPieData.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-xs text-muted-foreground">
-                暂无模型请求数据
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={modelPieData}
-                    cx="50%"
-                    cy="44%"
-                    innerRadius={40}
-                    outerRadius={68}
-                    paddingAngle={3}
-                    dataKey="count"
-                    nameKey="model"
-                    className="cursor-pointer"
-                    isAnimationActive={false}
-                    onClick={(data: any) => data?.model && toggleModelFilter(data.model)}
-                  >
-                    {modelPieData.map((_, index) => (
-                      <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip contentStyle={tooltipStyle} />
-                  <Legend
-                    verticalAlign="bottom"
-                    align="center"
-                    wrapperStyle={{ fontSize: '10px', paddingTop: '4px' }}
-                    formatter={(value: string) => (
-                      <span className="text-foreground truncate inline-block max-w-[115px] align-bottom" title={value}>
-                        {value}
-                      </span>
-                    )}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-        </div>
-
-        {/* 接口访问分布 (Endpoint) */}
-        <div className="lg:col-span-3 bg-card border border-border/80 rounded-2xl p-3.5 sm:p-5 shadow-sm min-w-0 overflow-hidden">
-          <h3 className="text-sm font-bold text-foreground mb-4 flex items-center gap-2">
-            <Server className="w-4 h-4 text-purple-500 shrink-0" />
-            接口访问分布 (Endpoint)
-          </h3>
-          <div className="h-60 min-w-0">
-            {formattedEndpointStats.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-xs text-muted-foreground">
-                暂无接口数据
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={formattedEndpointStats}
-                    cx="50%"
-                    cy="44%"
-                    innerRadius={36}
-                    outerRadius={66}
-                    paddingAngle={2}
-                    dataKey="value"
-                    nameKey="name"
-                    isAnimationActive={false}
-                    label={({ percent }) => `${(percent * 100).toFixed(0)}%`}
-                    labelLine={false}
-                  >
-                    {formattedEndpointStats.map((_, index) => (
-                      <Cell key={`cell-${index}`} fill={CHART_COLORS[(index + 2) % CHART_COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip contentStyle={tooltipStyle} />
-                  <Legend
-                    verticalAlign="bottom"
-                    wrapperStyle={{ fontSize: '10px' }}
-                    formatter={(value: string) => (
-                      <span className="text-muted-foreground truncate inline-block max-w-[110px] align-bottom" title={value}>
-                        {value}
-                      </span>
-                    )}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-        </div>
-      </div>
+      <DistributionsSection
+        formattedChannelStats={formattedChannelStats}
+        modelPieData={modelPieData}
+        formattedEndpointStats={formattedEndpointStats}
+        tooltipStyle={tooltipStyle}
+        toggleProviderFilter={toggleProviderFilter}
+        toggleModelFilter={toggleModelFilter}
+      />
 
       {/* =====================================================================
-          4. 渠道健康状况详细表（原版表格 + 融合缓存率、速度、Token、成本）
-         ===================================================================== */}
-      <div
-        id="section-channel-health"
-        style={{ contentVisibility: 'auto', containIntrinsicSize: '0 320px' }}
-        className="bg-card border border-border/80 rounded-2xl shadow-sm overflow-hidden min-w-0"
-      >
-        <div className="px-3.5 sm:px-5 py-3.5 sm:py-4 border-b border-border/70 bg-muted/20 flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2 flex-wrap">
-            <Cpu className="w-4 h-4 text-primary shrink-0" />
-            <h3 className="text-sm font-bold text-foreground">渠道健康状况详细</h3>
-            <span className="text-xs text-muted-foreground">
-              （基于 channel_stats 真实尝试成功率 + 遥测性能指标）
-            </span>
-          </div>
-          <span className="text-xs text-muted-foreground tabular-nums">
-            共 {channelStats.length} 个渠道
-          </span>
-        </div>
-        <div className="overflow-x-auto max-h-[360px] w-full">
-          <table className="w-full min-w-[680px] text-left text-xs whitespace-nowrap">
-            <thead className="bg-muted/70 text-muted-foreground font-medium sticky top-0 z-10">
-              <tr>
-                <th className="px-4 sm:px-5 py-3">渠道名称</th>
-                <th className="px-4 sm:px-5 py-3">健康状态</th>
-                <th className="px-4 sm:px-5 py-3 text-right">尝试请求数</th>
-                <th className="px-4 sm:px-5 py-3 text-right">渠道成功率</th>
-                <th className="px-4 sm:px-5 py-3 text-right">缓存命中率</th>
-                <th className="px-4 sm:px-5 py-3 text-right">生成速度 / 首字</th>
-                <th className="px-4 sm:px-5 py-3 text-right">Token 用量</th>
-                <th className="px-4 sm:px-5 py-3 text-right">API 等价</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/50 tabular-nums">
-              {channelStats.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="px-5 py-8 text-center text-muted-foreground">
-                    暂无渠道数据
-                  </td>
-                </tr>
-              ) : (
-                channelStats.map((channel, i) => {
-                  const isHealthy = channel.success_rate >= 0.95;
-                  const isWarning = channel.success_rate < 0.95 && channel.success_rate >= 0.8;
-                  const extra = providerExtraMap.get(channel.provider);
-                  const isSelected = selectedProviders.includes(channel.provider);
-                  return (
-                    <tr
-                      key={i}
-                      onClick={() => toggleProviderFilter(channel.provider)}
-                      className={`cursor-pointer transition-colors ${
-                        isSelected ? 'bg-primary/10' : 'hover:bg-muted/40'
-                      }`}
-                      title="点击筛选该渠道"
-                    >
-                      <td className="px-4 sm:px-5 py-3 font-semibold text-foreground">{channel.provider}</td>
-                      <td className="px-4 sm:px-5 py-3">
-                        <span
-                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border ${
-                            isHealthy
-                              ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'
-                              : isWarning
-                              ? 'bg-amber-500/10 text-amber-500 border-amber-500/20'
-                              : 'bg-red-500/10 text-red-500 border-red-500/20'
-                          }`}
-                        >
-                          {isHealthy ? (
-                            <CheckCircle2 className="w-3 h-3" />
-                          ) : (
-                            <AlertCircle className="w-3 h-3" />
-                          )}
-                          {isHealthy ? '良好' : isWarning ? '警告' : '异常'}
-                        </span>
-                      </td>
-                      <td className="px-4 sm:px-5 py-3 text-right text-muted-foreground">
-                        {channel.total_requests.toLocaleString()}
-                      </td>
-                      <td className="px-4 sm:px-5 py-3 text-right font-mono font-bold">
-                        <span
-                          className={
-                            isHealthy ? 'text-emerald-500' : isWarning ? 'text-amber-500' : 'text-red-500'
-                          }
-                        >
-                          {(channel.success_rate * 100).toFixed(1)}%
-                        </span>
-                      </td>
-                      <td className="px-4 sm:px-5 py-3 text-right text-cyan-400 font-medium">
-                        {extra ? `${extra.cache_hit_rate.toFixed(1)}%` : '-'}
-                      </td>
-                      <td className="px-4 sm:px-5 py-3 text-right text-muted-foreground">
-                        {extra && extra.speed_tok_s > 0
-                          ? `${extra.speed_tok_s.toFixed(1)} tok/s · ${extra.avg_ttft.toFixed(1)}s`
-                          : '-'}
-                      </td>
-                      <td className="px-4 sm:px-5 py-3 text-right font-semibold text-foreground">
-                        {extra ? formatTokens(extra.total_tokens) : '-'}
-                      </td>
-                      <td className="px-4 sm:px-5 py-3 text-right text-rose-400 font-semibold">
-                        {extra ? `¥${extra.cost_cny.toFixed(2)}` : '-'}
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* =====================================================================
-          5. 工作回溯 · 近一年每日活动热力图（受顶部全局模型/渠道筛选联动，悬浮状态隔离在子组件内）
+          4. 工作回溯 · 近一年每日活动热力图（受顶部全局模型/渠道筛选联动，悬浮状态隔离在子组件内）
          ===================================================================== */}
       <ActivityHeatmapSection heatmap={heatmap} hasActiveFilter={hasActiveFilter} />
 
       {/* =====================================================================
-          6. 统一用量明细表（渠道×模型交叉明细 / 按模型汇总 / 按渠道汇总）
-             - 直接联动顶部筛选器，去除重复的底部查询表单
+          5. 统一用量明细表（搜索、Tab 切换与展开状态均隔离在 memo 子组件中）
          ===================================================================== */}
-      <div
-        id="section-breakdown"
-        style={{ contentVisibility: 'auto', containIntrinsicSize: '0 400px' }}
-        className="bg-card border border-border/80 rounded-2xl p-3.5 sm:p-5 shadow-sm space-y-4 min-w-0 overflow-hidden"
-      >
-        <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center sm:justify-between gap-2.5 sm:gap-3 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <BarChart3 className="w-4 h-4 text-blue-500 shrink-0" />
-            <h3 className="text-sm font-bold text-foreground">用量明细</h3>
-            <span className="text-xs text-muted-foreground">
-              （点击表格任意模型或渠道可一键联动全页筛选）
-            </span>
-          </div>
-
-          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:flex-wrap min-w-0 w-full sm:w-auto">
-            {/* 表内快速搜索 */}
-            <div className="relative w-full sm:w-48">
-              <Search className="w-3.5 h-3.5 text-muted-foreground absolute left-2.5 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                value={tableSearch}
-                onChange={e => setTableSearch(e.target.value)}
-                placeholder="搜索 Key、模型或渠道..."
-                className="pl-8 pr-6 py-1.5 sm:py-1 text-xs bg-background border border-border rounded-lg text-foreground w-full focus:outline-none focus:ring-1 focus:ring-primary"
-              />
-              {tableSearch && (
-                <button
-                  type="button"
-                  onClick={() => setTableSearch('')}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              )}
-            </div>
-
-            <div className="inline-flex items-center bg-muted/50 border border-border/80 rounded-lg p-0.5 gap-0.5 overflow-x-auto no-scrollbar max-w-full flex-nowrap sm:flex-wrap min-w-0">
-              {[
-                { key: 'cross', label: `渠道 × 模型 (${filteredCrossRows.length})` },
-                { key: 'key', label: `按 Key 汇总 (${filteredKeyRows.length})` },
-                { key: 'key_model', label: `Key × 模型 (${filteredKeyModelRows.length})` },
-                { key: 'model', label: `按模型汇总 (${filteredModelRows.length})` },
-                { key: 'provider', label: `按渠道汇总 (${filteredProviderRows.length})` },
-              ].map(tab => (
-                <button
-                  key={tab.key}
-                  type="button"
-                  onClick={() => {
-                    setBreakdownTab(tab.key as 'cross' | 'key' | 'key_model' | 'model' | 'provider');
-                    setShowAllBreakdownRows(false);
-                  }}
-                  className={`px-2.5 sm:px-3 py-1 text-xs font-medium rounded-md transition-all whitespace-nowrap shrink-0 ${
-                    breakdownTab === tab.key
-                      ? 'bg-card text-foreground shadow-sm border border-border/60 font-semibold'
-                      : 'text-muted-foreground hover:text-foreground'
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* 渠道 × 模型交叉明细表 */}
-        {breakdownTab === 'cross' && (
-          <div className="overflow-x-auto border border-border/70 rounded-xl w-full">
-            <table className="w-full min-w-[720px] text-left text-xs whitespace-nowrap">
-              <thead className="bg-muted/60 text-muted-foreground font-medium">
-                <tr>
-                  <th className="px-4 py-3">渠道</th>
-                  <th className="px-4 py-3">模型</th>
-                  <th className="px-4 py-3 text-right">请求次数</th>
-                  <th className="px-4 py-3 text-right">成功率</th>
-                  <th className="px-4 py-3 text-right">输入 Token</th>
-                  <th className="px-4 py-3 text-right">输出 Token</th>
-                  <th className="px-4 py-3 text-right">缓存命中率</th>
-                  <th className="px-4 py-3 text-right">生成速度</th>
-                  <th className="px-4 py-3 text-right">总 Token</th>
-                  <th className="px-4 py-3 text-right">实记费用 / 等价</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border/50 tabular-nums">
-                {filteredCrossRows.length === 0 ? (
-                  <tr>
-                    <td colSpan={10} className="px-4 py-8 text-center text-muted-foreground">
-                      暂无匹配的明细记录
-                    </td>
-                  </tr>
-                ) : (
-                  (showAllBreakdownRows ? filteredCrossRows : filteredCrossRows.slice(0, 50)).map((entry, i) => (
-                    <tr key={i} className="hover:bg-muted/30 transition-colors">
-                      <td className="px-4 py-3 font-medium text-foreground">
-                        <button
-                          type="button"
-                          onClick={() => toggleProviderFilter(entry.provider)}
-                          className="hover:text-primary transition-colors"
-                        >
-                          {entry.provider}
-                        </button>
-                      </td>
-                      <td className="px-4 py-3 font-mono">
-                        <button
-                          type="button"
-                          onClick={() => toggleModelFilter(entry.model)}
-                          className="text-foreground font-semibold hover:text-primary transition-colors"
-                        >
-                          {entry.model}
-                        </button>
-                      </td>
-                      <td className="px-4 py-3 text-right text-muted-foreground">
-                        {entry.requests.toLocaleString()}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <span
-                          className={`font-semibold ${
-                            entry.success_rate >= 95
-                              ? 'text-emerald-400'
-                              : entry.success_rate >= 80
-                              ? 'text-amber-400'
-                              : 'text-rose-400'
-                          }`}
-                        >
-                          {entry.success_rate.toFixed(1)}%
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-right text-muted-foreground">
-                        {formatTokens(entry.prompt_tokens)}
-                      </td>
-                      <td className="px-4 py-3 text-right text-muted-foreground">
-                        {formatTokens(entry.completion_tokens)}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <span className="text-cyan-400 font-semibold">{entry.cache_hit_rate.toFixed(1)}%</span>
-                        <span className="text-muted-foreground ml-1">({formatTokens(entry.cached_tokens)})</span>
-                      </td>
-                      <td className="px-4 py-3 text-right text-muted-foreground">
-                        {entry.speed_tok_s > 0 ? `${entry.speed_tok_s.toFixed(1)} tok/s` : '-'}
-                      </td>
-                      <td className="px-4 py-3 text-right font-mono font-bold text-foreground">
-                        {formatTokens(entry.total_tokens)}
-                      </td>
-                      <td className="px-4 py-3 text-right font-mono">
-                        <span className="text-amber-500 font-semibold">
-                          {formatCost(entry.recorded_cost_usd)}
-                        </span>
-                        <span className="text-rose-400 ml-1.5">(¥{entry.cost_cny.toFixed(2)})</span>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {/* 按 Key 汇总明细表 */}
-        {breakdownTab === 'key' && (
-          <div className="overflow-x-auto border border-border/70 rounded-xl w-full">
-            <table className="w-full min-w-[780px] text-left text-xs whitespace-nowrap">
-              <thead className="bg-muted/60 text-muted-foreground font-medium">
-                <tr>
-                  <th className="px-4 py-3">API Key 名称 / 前缀</th>
-                  <th className="px-4 py-3">分组 / 母 Key</th>
-                  <th className="px-4 py-3 text-right">请求数</th>
-                  <th className="px-4 py-3 text-right">成功率</th>
-                  <th className="px-4 py-3 text-right">输入 Token</th>
-                  <th className="px-4 py-3 text-right">输出 Token</th>
-                  <th className="px-4 py-3 text-right">缓存命中率</th>
-                  <th className="px-4 py-3 text-right">速度 / 首字</th>
-                  <th className="px-4 py-3 text-right">总 Token (占比)</th>
-                  <th className="px-4 py-3 text-right">实记费用 / 等价</th>
-                  <th className="px-4 py-3 text-right">详情</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border/50 tabular-nums">
-                {filteredKeyRows.length === 0 ? (
-                  <tr>
-                    <td colSpan={11} className="px-4 py-8 text-center text-muted-foreground">
-                      暂无匹配的 API Key 用量记录
-                    </td>
-                  </tr>
-                ) : (
-                  (showAllBreakdownRows ? filteredKeyRows : filteredKeyRows.slice(0, 50)).map(row => (
-                    <tr
-                      key={row.key_hash}
-                      onClick={() => toggleKeyFilter(row.key_hash)}
-                      className={`hover:bg-muted/30 cursor-pointer transition-colors ${
-                        selectedKeys.includes(row.key_hash) ? 'bg-amber-500/10' : ''
-                      }`}
-                    >
-                      <td className="px-4 py-3">
-                        <div className="font-semibold text-foreground">{row.key_label}</div>
-                        <div className="text-[10px] font-mono text-muted-foreground">
-                          {row.api_key_prefix} · {row.unique_models} 模型
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-muted-foreground">
-                        {row.api_key_group || '-'}
-                        {row.parent_name ? ` (母: ${row.parent_name})` : ''}
-                      </td>
-                      <td className="px-4 py-3 text-right">{row.requests.toLocaleString()}</td>
-                      <td className="px-4 py-3 text-right font-semibold text-emerald-400">
-                        {row.success_rate.toFixed(1)}%
-                      </td>
-                      <td className="px-4 py-3 text-right text-muted-foreground">
-                        {formatTokens(row.prompt_tokens)}
-                      </td>
-                      <td className="px-4 py-3 text-right text-muted-foreground">
-                        {formatTokens(row.completion_tokens)}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <span className="text-cyan-400 font-bold">{row.cache_hit_rate.toFixed(1)}%</span>
-                        <span className="text-muted-foreground ml-1">({formatTokens(row.cached_tokens)})</span>
-                      </td>
-                      <td className="px-4 py-3 text-right text-muted-foreground">
-                        <span className="text-foreground font-medium">{row.speed_tok_s.toFixed(1)}</span> tok/s ·{' '}
-                        {row.avg_ttft.toFixed(1)}s
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <div className="flex items-center justify-end gap-2">
-                          <span className="font-semibold text-foreground">{formatTokens(row.total_tokens)}</span>
-                          <div className="w-14 h-1.5 bg-muted rounded-full overflow-hidden">
-                            <div
-                              className="h-full bg-amber-500"
-                              style={{ width: `${Math.min(100, row.token_share)}%` }}
-                            />
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-right font-mono">
-                        <span className="text-amber-500 font-semibold">
-                          {formatCost(row.recorded_cost_usd)}
-                        </span>
-                        <span className="text-rose-400 ml-1.5">(¥{row.cost_cny.toFixed(2)})</span>
-                      </td>
-                      <td
-                        className="px-4 py-3 text-right"
-                        onClick={e => e.stopPropagation()}
-                      >
-                        {row.can_drilldown ? (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setAnalyticsTargetKey({
-                                key_hash: row.key_hash,
-                                key_label: row.key_label,
-                              })
-                            }
-                            className="px-2 py-0.5 text-[11px] font-medium rounded bg-primary/10 text-primary hover:bg-primary/20 border border-primary/30"
-                          >
-                            分析
-                          </button>
-                        ) : (
-                          '-'
-                        )}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {/* Key × 模型交叉明细表 */}
-        {breakdownTab === 'key_model' && (
-          <div className="overflow-x-auto border border-border/70 rounded-xl w-full">
-            <table className="w-full min-w-[720px] text-left text-xs whitespace-nowrap">
-              <thead className="bg-muted/60 text-muted-foreground font-medium">
-                <tr>
-                  <th className="px-4 py-3">API Key</th>
-                  <th className="px-4 py-3">模型</th>
-                  <th className="px-4 py-3 text-right">请求次数</th>
-                  <th className="px-4 py-3 text-right">成功率</th>
-                  <th className="px-4 py-3 text-right">输入 Token</th>
-                  <th className="px-4 py-3 text-right">输出 Token</th>
-                  <th className="px-4 py-3 text-right">缓存命中率</th>
-                  <th className="px-4 py-3 text-right">生成速度</th>
-                  <th className="px-4 py-3 text-right">总 Token</th>
-                  <th className="px-4 py-3 text-right">实记费用 / 等价</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border/50 tabular-nums">
-                {filteredKeyModelRows.length === 0 ? (
-                  <tr>
-                    <td colSpan={10} className="px-4 py-8 text-center text-muted-foreground">
-                      暂无匹配的 Key × 模型明细记录
-                    </td>
-                  </tr>
-                ) : (
-                  (showAllBreakdownRows ? filteredKeyModelRows : filteredKeyModelRows.slice(0, 50)).map((entry, i) => (
-                    <tr key={i} className="hover:bg-muted/30 transition-colors">
-                      <td className="px-4 py-3 font-medium text-foreground">
-                        <button
-                          type="button"
-                          onClick={() => toggleKeyFilter(entry.key_hash)}
-                          className="hover:text-amber-400 transition-colors text-left"
-                        >
-                          <div className="font-semibold">{entry.key_label}</div>
-                          <div className="text-[10px] font-mono text-muted-foreground">
-                            {entry.api_key_prefix}
-                          </div>
-                        </button>
-                      </td>
-                      <td className="px-4 py-3 font-mono">
-                        <button
-                          type="button"
-                          onClick={() => toggleModelFilter(entry.model)}
-                          className="text-foreground font-semibold hover:text-primary transition-colors"
-                        >
-                          {entry.model}
-                        </button>
-                      </td>
-                      <td className="px-4 py-3 text-right text-muted-foreground">
-                        {entry.requests.toLocaleString()}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <span
-                          className={`font-semibold ${
-                            entry.success_rate >= 95
-                              ? 'text-emerald-400'
-                              : entry.success_rate >= 80
-                              ? 'text-amber-400'
-                              : 'text-rose-400'
-                          }`}
-                        >
-                          {entry.success_rate.toFixed(1)}%
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-right text-muted-foreground">
-                        {formatTokens(entry.prompt_tokens)}
-                      </td>
-                      <td className="px-4 py-3 text-right text-muted-foreground">
-                        {formatTokens(entry.completion_tokens)}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <span className="text-cyan-400 font-semibold">{entry.cache_hit_rate.toFixed(1)}%</span>
-                        <span className="text-muted-foreground ml-1">({formatTokens(entry.cached_tokens)})</span>
-                      </td>
-                      <td className="px-4 py-3 text-right text-muted-foreground">
-                        {entry.speed_tok_s > 0 ? `${entry.speed_tok_s.toFixed(1)} tok/s` : '-'}
-                      </td>
-                      <td className="px-4 py-3 text-right font-mono font-bold text-foreground">
-                        {formatTokens(entry.total_tokens)}
-                      </td>
-                      <td className="px-4 py-3 text-right font-mono">
-                        <span className="text-amber-500 font-semibold">
-                          {formatCost(entry.recorded_cost_usd)}
-                        </span>
-                        <span className="text-rose-400 ml-1.5">(¥{entry.cost_cny.toFixed(2)})</span>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {/* 按模型汇总明细表 */}
-        {breakdownTab === 'model' && (
-          <div className="overflow-x-auto border border-border/70 rounded-xl w-full">
-            <table className="w-full min-w-[680px] text-left text-xs whitespace-nowrap">
-              <thead className="bg-muted/60 text-muted-foreground font-medium">
-                <tr>
-                  <th className="px-4 py-3">模型名称</th>
-                  <th className="px-4 py-3 text-right">请求数</th>
-                  <th className="px-4 py-3 text-right">成功率</th>
-                  <th className="px-4 py-3 text-right">输入 Token</th>
-                  <th className="px-4 py-3 text-right">输出 Token</th>
-                  <th className="px-4 py-3 text-right">独立缓存命中率</th>
-                  <th className="px-4 py-3 text-right">速度 / 首字</th>
-                  <th className="px-4 py-3 text-right">总 Token (占比)</th>
-                  <th className="px-4 py-3 text-right">API 等价</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border/50 tabular-nums">
-                {(showAllBreakdownRows ? filteredModelRows : filteredModelRows.slice(0, 50)).map(row => (
-                  <tr
-                    key={row.model}
-                    onClick={() => row.model && toggleModelFilter(row.model)}
-                    className="hover:bg-muted/30 cursor-pointer transition-colors"
-                  >
-                    <td className="px-4 py-3 font-semibold text-foreground">{row.model}</td>
-                    <td className="px-4 py-3 text-right">{row.requests.toLocaleString()}</td>
-                    <td className="px-4 py-3 text-right font-semibold text-emerald-400">
-                      {row.success_rate.toFixed(1)}%
-                    </td>
-                    <td className="px-4 py-3 text-right text-muted-foreground">
-                      {formatTokens(row.prompt_tokens)}
-                    </td>
-                    <td className="px-4 py-3 text-right text-muted-foreground">
-                      {formatTokens(row.completion_tokens)}
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <span className="text-cyan-400 font-bold">{row.cache_hit_rate.toFixed(1)}%</span>
-                      <span className="text-muted-foreground ml-1">({formatTokens(row.cached_tokens)})</span>
-                    </td>
-                    <td className="px-4 py-3 text-right text-muted-foreground">
-                      <span className="text-foreground font-medium">{row.speed_tok_s.toFixed(1)}</span> tok/s ·{' '}
-                      {row.avg_ttft.toFixed(1)}s
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <span className="font-semibold text-foreground">{formatTokens(row.total_tokens)}</span>
-                        <div className="w-14 h-1.5 bg-muted rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-[#ef7d52]"
-                            style={{ width: `${Math.min(100, row.token_share)}%` }}
-                          />
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-right font-semibold text-rose-400">
-                      ¥{row.cost_cny.toFixed(2)} (${row.cost_usd.toFixed(2)})
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {/* 按渠道汇总明细表 */}
-        {breakdownTab === 'provider' && (
-          <div className="overflow-x-auto border border-border/70 rounded-xl w-full">
-            <table className="w-full min-w-[640px] text-left text-xs whitespace-nowrap">
-              <thead className="bg-muted/60 text-muted-foreground font-medium">
-                <tr>
-                  <th className="px-4 py-3">渠道名称</th>
-                  <th className="px-4 py-3 text-right">请求数</th>
-                  <th className="px-4 py-3 text-right">成功率</th>
-                  <th className="px-4 py-3 text-right">缓存命中率</th>
-                  <th className="px-4 py-3 text-right">平均速度 / 首字</th>
-                  <th className="px-4 py-3 text-right">总 Token</th>
-                  <th className="px-4 py-3 text-right">API 等价</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border/50 tabular-nums">
-                {(showAllBreakdownRows ? filteredProviderRows : filteredProviderRows.slice(0, 50)).map(row => (
-                  <tr
-                    key={row.provider}
-                    onClick={() => row.provider && toggleProviderFilter(row.provider)}
-                    className="hover:bg-muted/30 cursor-pointer transition-colors"
-                  >
-                    <td className="px-4 py-3 font-semibold text-foreground">{row.provider}</td>
-                    <td className="px-4 py-3 text-right">{row.requests.toLocaleString()}</td>
-                    <td className="px-4 py-3 text-right font-semibold text-emerald-400">
-                      {row.success_rate.toFixed(1)}%
-                    </td>
-                    <td className="px-4 py-3 text-right text-cyan-400 font-bold">
-                      {row.cache_hit_rate.toFixed(1)}%
-                    </td>
-                    <td className="px-4 py-3 text-right text-muted-foreground">
-                      <span className="text-foreground font-medium">{row.speed_tok_s.toFixed(1)}</span> tok/s ·{' '}
-                      {row.avg_ttft.toFixed(1)}s
-                    </td>
-                    <td className="px-4 py-3 text-right font-semibold text-foreground">
-                      {formatTokens(row.total_tokens)}
-                    </td>
-                    <td className="px-4 py-3 text-right font-semibold text-rose-400">
-                      ¥{row.cost_cny.toFixed(2)} (${row.cost_usd.toFixed(2)})
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {(() => {
-          const activeLen =
-            breakdownTab === 'cross'
-              ? filteredCrossRows.length
-              : breakdownTab === 'key'
-              ? filteredKeyRows.length
-              : breakdownTab === 'key_model'
-              ? filteredKeyModelRows.length
-              : breakdownTab === 'model'
-              ? filteredModelRows.length
-              : filteredProviderRows.length;
-          if (activeLen <= 50) return null;
-          return (
-            <div className="flex justify-center pt-1">
-              <button
-                type="button"
-                onClick={() => setShowAllBreakdownRows(v => !v)}
-                className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground bg-muted/40 hover:bg-muted/70 border border-border/70 rounded-xl transition-colors"
-              >
-                {showAllBreakdownRows ? (
-                  <>
-                    收起至前 50 条记录 <ChevronUp className="w-3.5 h-3.5" />
-                  </>
-                ) : (
-                  <>
-                    展开全部 {activeLen} 条记录 <ChevronDown className="w-3.5 h-3.5" />
-                  </>
-                )}
-              </button>
-            </div>
-          );
-        })()}
-      </div>
+      <BreakdownSection
+        crossBreakdown={crossBreakdown}
+        keyBreakdown={keyBreakdown}
+        keyModelBreakdown={keyModelBreakdown}
+        modelBreakdown={modelBreakdown}
+        providerBreakdown={providerBreakdown}
+        channelAttemptMap={channelAttemptMap}
+        selectedKeys={selectedKeys}
+        toggleProviderFilter={toggleProviderFilter}
+        toggleModelFilter={toggleModelFilter}
+        toggleKeyFilter={toggleKeyFilter}
+        onSelectAnalyticsKey={setAnalyticsTargetKey}
+        jumpTab={breakdownInitialTab}
+        jumpSeq={breakdownJumpSeq}
+      />
 
       {/* Key 深度分析侧滑抽屉（查看 IP 分布、配额与报错明细，全程使用安全 key_hash 不暴露完整密钥） */}
       <KeyAnalyticsSheet

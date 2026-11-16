@@ -288,7 +288,7 @@ async def test_dashboard_overview_key_usage_and_filter_linkage(monkeypatch):
     import db
 
     # 1) 全量不带 key_hash 过滤：返回两条 Key 的排行、Key×模型明细与时序，且绝不泄露完整 API Key
-    fake_d1_all = _SequentialD1Client([ts_rows_mock, lat_rows_mock, recent_rows_mock, heatmap_rows_mock])
+    fake_d1_all = _SequentialD1Client([ts_rows_mock, recent_rows_mock, heatmap_rows_mock])
     monkeypatch.setattr(db, "d1_client", fake_d1_all)
 
     res_all = await stats_route.get_dashboard_overview(
@@ -321,7 +321,7 @@ async def test_dashboard_overview_key_usage_and_filter_linkage(monkeypatch):
     assert len(data_all["key_model_breakdown"]) == 2
 
     # 2) 按单条 key_hash 筛选联动：KPI、时序、最近请求、热力图与明细同步过滤为 Beta Key，但 available_keys 仍保留全部 2 条供切换
-    fake_d1_filtered = _SequentialD1Client([ts_rows_mock, lat_rows_mock, recent_rows_mock, heatmap_rows_mock])
+    fake_d1_filtered = _SequentialD1Client([ts_rows_mock, recent_rows_mock, heatmap_rows_mock])
     monkeypatch.setattr(db, "d1_client", fake_d1_filtered)
 
     res_beta = await stats_route.get_dashboard_overview(
