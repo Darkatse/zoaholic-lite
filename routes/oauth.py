@@ -137,7 +137,7 @@ def _oauth_success_page(key_id: str, state: str, provider: str, already_exists: 
 </div>
 <script>
   if (window.opener) {{
-    window.opener.postMessage({message_payload}, '*');
+    window.opener.postMessage({message_payload}, window.location.origin);
   }}
   setTimeout(() => window.close(), 3000);
 </script>

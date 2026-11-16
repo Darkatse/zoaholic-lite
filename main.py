@@ -144,7 +144,7 @@ async def _do_compact_db(app):
             if os.path.exists(compact_path):
                 os.remove(compact_path)
             conn = sqlite3.connect(db_path)
-            conn.execute(f"VACUUM INTO '{compact_path}'")
+            conn.execute("VACUUM INTO ?", (compact_path,))
             conn.close()
 
         await asyncio.to_thread(do_vacuum_into)
@@ -1093,7 +1093,8 @@ async def ensure_config(request: Request, call_next):
                             "Authorization": f"Bearer {provider_name}"
                         }
                         # 发送GET请求获取模型列表
-                        base_url = "http://127.0.0.1:8000/v1/models"
+                        port = int(os.getenv("PORT", "8000"))
+                        base_url = f"http://127.0.0.1:{port}/v1/models"
                         async with app.state.client_manager.get_client(base_url) as client:
                             response = await client.get(base_url, headers=headers)
                             if response.status_code == 200:

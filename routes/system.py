@@ -8,6 +8,7 @@
 """
 
 import os
+import shutil
 import subprocess
 import asyncio
 from pathlib import Path
@@ -594,18 +595,19 @@ def _read_version_from_pyproject(cwd: str) -> str:
 
 
 async def _sync_dirs(src: str, dst: str, exclude: list[str] | None = None) -> bool:
-    """同步目录，优先 rsync，fallback cp"""
-    src = src.rstrip("/") + "/"
-    dst = dst.rstrip("/") + "/"
+    """同步目录，优先 rsync，fallback shutil.copytree"""
+    src_dir = src.rstrip("/") + "/"
+    dst_dir = dst.rstrip("/") + "/"
 
     # 尝试 rsync
     try:
-        exclude_args = ""
+        cmd = ["rsync", "-a"]
         if exclude:
-            exclude_args = " ".join(f"--exclude='{e}'" for e in exclude)
-        cmd = f"rsync -a {exclude_args} {src} {dst}"
+            for item in exclude:
+                cmd.append(f"--exclude={item}")
+        cmd.extend([src_dir, dst_dir])
         result = await asyncio.to_thread(
-            subprocess.run, cmd, shell=True,
+            subprocess.run, cmd,
             capture_output=True, text=True, timeout=30
         )
         if result.returncode == 0:
@@ -613,14 +615,25 @@ async def _sync_dirs(src: str, dst: str, exclude: list[str] | None = None) -> bo
     except Exception:
         pass
 
-    # fallback: cp（不支持 exclude，直接全量覆盖）
+    # fallback: shutil.copytree
     try:
-        result = await asyncio.to_thread(
-            subprocess.run,
-            f"cp -r {src}* {dst}",
-            shell=True, capture_output=True, text=True, timeout=30
-        )
-        return result.returncode == 0
+        exclude_set = set(exclude or [])
+
+        def _copy_sync():
+            src_path = Path(src)
+            dst_path = Path(dst)
+            dst_path.mkdir(parents=True, exist_ok=True)
+            for item in src_path.iterdir():
+                if item.name in exclude_set:
+                    continue
+                target = dst_path / item.name
+                if item.is_dir():
+                    shutil.copytree(item, target, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(item, target)
+            return True
+
+        return await asyncio.to_thread(_copy_sync)
     except Exception:
         return False
 

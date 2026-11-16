@@ -44,6 +44,9 @@ def test_vuln07_client_ip_ignores_forged_xff_first_hop_and_prefers_cf_connecting
     )
     assert openai_responses_ws._get_client_ip(ws_mock) == "192.0.2.77"
 
+    direct_scope = {"client": ("198.51.100.200", 54321)}
+    assert StatsMiddleware._get_client_ip(direct_scope, headers_with_cf) == "198.51.100.200"
+
 
 def test_vuln11_scrub_sensitive_error_text_redacts_query_keys_and_provider_secrets():
     raw_err = (
@@ -114,6 +117,13 @@ async def test_vuln09_login_brute_force_lockout(monkeypatch):
             payload=auth_routes.LoginRequest(username="admin", password="correct-password"),
         )
     assert locked_exc.value.status_code == 429
+
+    with pytest.raises(HTTPException) as setup_locked_exc:
+        await setup_routes.setup_login(
+            payload=setup_routes.SetupLoginRequest(username="admin", password="correct-password"),
+            request=req,
+        )
+    assert setup_locked_exc.value.status_code == 429
     auth_routes._LOGIN_FAILURES.clear()
 
 
@@ -313,5 +323,52 @@ async def test_handler_aborts_retry_when_client_disconnected(monkeypatch):
             raw_request=DisconnectedRawRequest(),
         )
     assert len(attempts_made) == 1
+
+
+@pytest.mark.asyncio
+async def test_stats_middleware_rejects_oversized_json_body(monkeypatch):
+    import core.middleware as mw
+
+    monkeypatch.setattr(mw, "MAX_REQUEST_BODY_BYTES", 64)
+    monkeypatch.setattr(mw, "ensure_initialized", AsyncMock(return_value=None))
+
+    app = FastAPI()
+    app.state.config = {"api_keys": [{"api": "zk-test", "model": ["all"]}]}
+    app.state.api_list = ["zk-test"]
+    app.state.api_keys_db = [{"api": "zk-test", "model": ["all"]}]
+    app.state.paid_api_keys_states = {}
+
+    sent_messages = []
+
+    async def dummy_app(scope, receive, send):
+        raise AssertionError("Downstream app must not be called when body exceeds limit")
+
+    middleware = StatsMiddleware(dummy_app)
+
+    chunks = [
+        {"type": "http.request", "body": b'{"data":"' + b"x" * 100 + b'"}', "more_body": False},
+    ]
+
+    async def receive():
+        return chunks.pop(0)
+
+    async def send(msg):
+        sent_messages.append(msg)
+
+    scope = {
+        "type": "http",
+        "path": "/v1/chat/completions",
+        "method": "POST",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"authorization", b"Bearer zk-test"),
+        ],
+        "client": ("127.0.0.1", 12345),
+        "app": app,
+    }
+
+    await middleware(scope, receive, send)
+    assert any(m.get("type") == "http.response.start" and m.get("status") == 413 for m in sent_messages)
+
 
 

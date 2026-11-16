@@ -55,6 +55,7 @@ request_info = contextvars.ContextVar("request_info", default={})
 # 修改方式：标准 /v1 鉴权前先匹配公开路径白名单。
 # 目的：让中间件鉴权覆盖所有非方言 /v1 端点的同时，不破坏 OAuth 登录回跳。
 _PUBLIC_V1_PATHS = frozenset({"/v1/oauth/callback"})
+MAX_REQUEST_BODY_BYTES = int(os.getenv("MAX_REQUEST_BODY_BYTES", str(64 * 1024 * 1024)))
 
 
 def get_api_key_from_headers(headers: list) -> Optional[str]:
@@ -467,13 +468,30 @@ class StatsMiddleware:
             content_type = headers_dict.get("content-type", "")
 
             if method == "POST" and "application/json" in content_type:
+                content_length_raw = headers_dict.get("content-length")
+                if content_length_raw:
+                    try:
+                        if int(content_length_raw) > MAX_REQUEST_BODY_BYTES:
+                            response = openai_error_response("Request body too large", 413)
+                            await response(scope, receive, send)
+                            return
+                    except ValueError:
+                        pass
                 # 收集所有 body chunks
                 body_chunks = []
+                total_body_bytes = 0
                 while True:
                     message = await receive()
                     if message["type"] == "http.disconnect":
                         return
-                    body_chunks.append(message.get("body", b""))
+                    chunk = message.get("body", b"")
+                    total_body_bytes += len(chunk)
+                    if total_body_bytes > MAX_REQUEST_BODY_BYTES:
+                        body_chunks.clear()
+                        response = openai_error_response("Request body too large", 413)
+                        await response(scope, receive, send)
+                        return
+                    body_chunks.append(chunk)
                     if not message.get("more_body", False):
                         break
                 body_bytes = b"".join(body_chunks)

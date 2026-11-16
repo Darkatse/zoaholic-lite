@@ -81,7 +81,8 @@ async def rate_limit_dependency(request: Request):
     根据 app.state.global_rate_limit 对所有请求进行限流。
     """
     app = request.app
-    if await rate_limiter.is_rate_limited("global", app.state.global_rate_limit):
+    global_limit = getattr(app.state, "global_rate_limit", None)
+    if global_limit and await rate_limiter.is_rate_limited("global", global_limit):
         raise HTTPException(status_code=429, detail="Too many requests")
 
 
