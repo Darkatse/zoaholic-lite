@@ -1073,40 +1073,55 @@ app.add_middleware(
 
 app.add_middleware(StatsMiddleware, debug=is_debug)
 
+DEFAULT_CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; "
+    "script-src 'self'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: blob: https: http:; "
+    "font-src 'self' data:; "
+    "connect-src 'self' ws: wss: https: http:; "
+    "media-src 'self' data: blob: https: http:; "
+    "frame-src 'none'; "
+    "object-src 'none'; "
+    "base-uri 'self'; "
+    "frame-ancestors 'none'"
+)
+
+
 @app.middleware("http")
 async def ensure_config(request: Request, call_next):
     # 避免在 /v1 请求内进行自调用，防止递归卡死
-    if request.url.path.startswith("/v1"):
-        return await call_next(request)
+    if not request.url.path.startswith("/v1"):
+        if app and app.state.api_keys_db and not hasattr(app.state, "models_list"):
+            app.state.models_list = {}
+            for item in app.state.api_keys_db:
+                api_key_model_list = item.get("model", [])
+                for provider_rule in api_key_model_list:
+                    provider_name = provider_rule.split("/")[0]
+                    if is_local_api_key(provider_name) and provider_name in app.state.api_list:
+                        models_list = []
+                        try:
+                            headers = {
+                                "Authorization": f"Bearer {provider_name}"
+                            }
+                            port = int(os.getenv("PORT", "8000"))
+                            base_url = f"http://127.0.0.1:{port}/v1/models"
+                            async with app.state.client_manager.get_client(base_url) as client:
+                                response = await client.get(base_url, headers=headers)
+                                if response.status_code == 200:
+                                    models_data = response.json()
+                                    for model in models_data.get("data", []):
+                                        models_list.append(model["id"])
+                        except Exception as e:
+                            if str(e):
+                                logger.error(f"获取模型列表失败: {str(e)}")
+                        app.state.models_list[provider_name] = models_list
 
-    if app and app.state.api_keys_db and not hasattr(app.state, "models_list"):
-        app.state.models_list = {}
-        for item in app.state.api_keys_db:
-            api_key_model_list = item.get("model", [])
-            for provider_rule in api_key_model_list:
-                provider_name = provider_rule.split("/")[0]
-                if is_local_api_key(provider_name) and provider_name in app.state.api_list:
-                    models_list = []
-                    try:
-                        # 构建请求头
-                        headers = {
-                            "Authorization": f"Bearer {provider_name}"
-                        }
-                        # 发送GET请求获取模型列表
-                        port = int(os.getenv("PORT", "8000"))
-                        base_url = f"http://127.0.0.1:{port}/v1/models"
-                        async with app.state.client_manager.get_client(base_url) as client:
-                            response = await client.get(base_url, headers=headers)
-                            if response.status_code == 200:
-                                models_data = response.json()
-                                # 将获取到的模型添加到models_list
-                                for model in models_data.get("data", []):
-                                    models_list.append(model["id"])
-                    except Exception as e:
-                        if str(e):
-                            logger.error(f"获取模型列表失败: {str(e)}")
-                    app.state.models_list[provider_name] = models_list
-    return await call_next(request)
+    response = await call_next(request)
+    response.headers.setdefault("Content-Security-Policy", DEFAULT_CONTENT_SECURITY_POLICY)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    return response
 
 
 # ModelRequestHandler 实例，将在应用生命周期中初始化

@@ -5,8 +5,30 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import rehypeRaw from 'rehype-raw';
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import { Check, Copy } from 'lucide-react';
 import 'katex/dist/katex.min.css';
+
+const MARKDOWN_SANITIZE_SCHEMA = {
+  ...defaultSchema,
+  attributes: {
+    ...defaultSchema.attributes,
+    code: [...(defaultSchema.attributes?.code || []), ['className', /^language-./, 'math-inline', 'math-display']],
+    span: [...(defaultSchema.attributes?.span || []), ['className', 'math', 'math-inline', 'math-display']],
+    div: [...(defaultSchema.attributes?.div || []), ['className', 'math', 'math-display']],
+    li: [...(defaultSchema.attributes?.li || []), ['className', 'task-list-item']],
+    input: [...(defaultSchema.attributes?.input || []), ['type', 'checkbox'], 'disabled', 'checked'],
+    section: [...(defaultSchema.attributes?.section || []), 'dataFootnotes', 'data-footnotes'],
+    a: [...(defaultSchema.attributes?.a || []), 'dataFootnoteRef', 'data-footnote-ref', 'dataFootnoteBackref', 'data-footnote-backref'],
+  },
+};
+
+const REMARK_PLUGINS = [remarkGfm, remarkMath];
+const REHYPE_PLUGINS: NonNullable< Parameters<typeof ReactMarkdown>[0]['rehypePlugins'] > = [
+  rehypeRaw,
+  [rehypeSanitize, MARKDOWN_SANITIZE_SCHEMA],
+  rehypeKatex,
+];
 
 interface MarkdownRendererProps {
   content: string;
@@ -290,6 +312,18 @@ function createMarkdownComponents(tone: MarkdownTone): Components {
       const rest = props as Record<string, unknown>;
       const isFootnoteSection = hasDataAttribute(rest, 'data-footnotes');
       return <section className={mergeClassNames(isFootnoteSection && styles.footnoteSection, className)} {...props} />;
+    },
+    iframe() {
+      return null;
+    },
+    script() {
+      return null;
+    },
+    object() {
+      return null;
+    },
+    embed() {
+      return null;
     }
   };
 }
@@ -302,12 +336,9 @@ export function MarkdownRenderer({ content, className = '', tone = 'default' }: 
 
   return (
     <div className={`markdown-body break-words text-left text-[14.5px] leading-relaxed ${TONE_STYLES[tone].root} ${tone === 'inverse' ? '[&_.katex]:text-primary-foreground/90' : ''} [&_.katex-display]:my-3 [&_.katex-display]:overflow-x-auto ${className}`.trim()}>
-      {/* 修改原因：Markdown 语法解析需要由标准库负责，避免手写 parser 漏掉锚点、HTML、嵌套列表和 GFM 语法。
-          修改方式：ReactMarkdown 负责语法树渲染，remark/rehype 插件负责 GFM、数学公式、KaTeX 和 raw HTML，components 负责主题样式迁移。
-          目的：保持现有组件接口和视觉表现，同时提升 markdown 规范兼容性。 */}
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[rehypeRaw, rehypeKatex]}
+        remarkPlugins={REMARK_PLUGINS}
+        rehypePlugins={REHYPE_PLUGINS}
         components={components}
         urlTransform={defaultUrlTransform}
       >

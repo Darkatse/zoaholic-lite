@@ -104,10 +104,8 @@ def _oauth_error_page(title: str, message: str, status_code: int = 400) -> HTMLR
 
 def _oauth_success_page(key_id: str, state: str, provider: str, already_exists: bool = False) -> HTMLResponse:
     """生成 OAuth 成功提示页，并通知前端窗口刷新账号列表。"""
-    # 修改原因：callback 页面需要把新增账号标识和渠道名传回管理前端，but key_id/provider 不能直接拼进脚本字符串。
-    # 修改方式：HTML 展示部分使用 html.escape，postMessage 载荷先用 json.dumps 序列化，再转义脚本敏感字符。
-    # 目的：完成弹窗登录闭环，同时避免账号字符串中的特殊字符破坏 HTML、JavaScript 或 script 标签边界。
     safe_key_id = html.escape(key_id)
+    script_nonce = secrets.token_urlsafe(16)
     message_payload = (
         json.dumps(
             {"type": "oauth_callback_success", "key_id": key_id, "state": state, "provider": provider, "already_exists": already_exists},
@@ -117,7 +115,12 @@ def _oauth_success_page(key_id: str, state: str, provider: str, already_exists: 
         .replace("<", "\\u003c")
         .replace(">", "\\u003e")
     )
-    return HTMLResponse(f"""
+    csp_header = (
+        f"default-src 'self'; script-src 'nonce-{script_nonce}'; style-src 'unsafe-inline'; "
+        "object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+    )
+    return HTMLResponse(
+        f"""
 <!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><title>登录成功</title>
@@ -135,7 +138,7 @@ def _oauth_success_page(key_id: str, state: str, provider: str, already_exists: 
   <p>账号 <span class="email">{safe_key_id}</span> 已添加到 Zoaholic</p>
   <p>此窗口将在 3 秒后自动关闭</p>
 </div>
-<script>
+<script nonce="{script_nonce}">
   if (window.opener) {{
     window.opener.postMessage({message_payload}, window.location.origin);
   }}
@@ -143,7 +146,9 @@ def _oauth_success_page(key_id: str, state: str, provider: str, already_exists: 
 </script>
 </body>
 </html>
-""")
+""",
+        headers={"Content-Security-Policy": csp_header},
+    )
 
 
 def _token_data_from_body(body: dict) -> dict:

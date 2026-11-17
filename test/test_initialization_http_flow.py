@@ -76,9 +76,13 @@ async def test_setup_to_authenticated_api_flow(tmp_path, monkeypatch, existing_c
             assert (await client.post("/setup/init", json=payload)).status_code == 409
             login = await client.post("/auth/login", json={"username": "owner", "password": "private-test-password"})
             assert login.status_code == 200, login.text
-            token = login.json()["access_token"]
+            login_json = login.json()
+            assert "admin_api_key" not in login_json
+            token = login_json["access_token"]
             me = await client.get("/auth/me", headers={"Authorization": "Bearer " + token})
-            assert me.status_code == 200 and me.json()["role"] == "admin"
+            me_json = me.json()
+            assert me.status_code == 200 and me_json["role"] == "admin"
+            assert "admin_api_key" not in me_json
     finally:
         await engine.dispose()
 

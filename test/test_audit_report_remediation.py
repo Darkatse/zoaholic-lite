@@ -371,4 +371,21 @@ async def test_stats_middleware_rejects_oversized_json_body(monkeypatch):
     assert any(m.get("type") == "http.response.start" and m.get("status") == 413 for m in sent_messages)
 
 
+@pytest.mark.asyncio
+async def test_csp_headers_and_oauth_nonce():
+    import main as main_mod
+    from routes.oauth import _oauth_success_page
+
+    assert "frame-src 'none'" in main_mod.DEFAULT_CONTENT_SECURITY_POLICY
+    assert "object-src 'none'" in main_mod.DEFAULT_CONTENT_SECURITY_POLICY
+    assert "script-src 'self'" in main_mod.DEFAULT_CONTENT_SECURITY_POLICY
+
+    oauth_resp = _oauth_success_page("acct-1", "st-1", "prov-1")
+    csp = oauth_resp.headers.get("Content-Security-Policy", "")
+    assert "script-src 'nonce-" in csp
+    body_text = oauth_resp.body.decode("utf-8")
+    assert 'nonce="' in body_text
+
+
+
 
