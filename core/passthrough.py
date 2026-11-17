@@ -317,7 +317,7 @@ async def fetch_passthrough_response(
 
     error_message = await check_response(response, "passthrough_non_stream")
     if error_message:
-        error_message = await _apply_response_path_interceptors(
+        error_message = await apply_response_path_interceptors(
             error_message, engine or "passthrough", model or "", is_stream=False,
             enabled_plugins=enabled_plugins,
             provider=provider,
@@ -332,7 +332,7 @@ async def fetch_passthrough_response(
     logger.debug(f"[passthrough] aread() took {t3-t2:.3f}s, size={len(response_bytes)} bytes")
 
     result = response_bytes.decode("utf-8")
-    result = await _apply_response_path_interceptors(
+    result = await apply_response_path_interceptors(
         result, engine or "passthrough", model or "", is_stream=False,
         enabled_plugins=enabled_plugins,
         provider=provider,
@@ -340,6 +340,9 @@ async def fetch_passthrough_response(
         key_enabled_plugins=key_enabled_plugins,
     )
     yield result
+
+
+_fetch_passthrough_response = fetch_passthrough_response
 
 
 async def _passthrough_error_wrapper(generator, channel_id="passthrough", keepalive_interval: Optional[int] = None, *, stream=True, current_info=None, engine=None, stream_header_timeout: Optional[float] = None):
