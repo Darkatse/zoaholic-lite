@@ -485,22 +485,19 @@ async def reload_all_plugins(_: int = Depends(verify_admin_api_key)):
     manager = get_plugin_manager()
     interceptor_registry = get_interceptor_registry()
 
-    # 1. 注销所有已注册的插件拦截器
+    # 1. 注销所有已注册的插件拦截器并卸载插件（包含 teardown 与扩展点注销）
     existing_plugins = list(manager.loader.plugins.keys())
     for name in existing_plugins:
         try:
             interceptor_registry.unregister_plugin_interceptors(name)
         except Exception:
             pass
-
-    # 2. 卸载所有插件
-    for name in existing_plugins:
         try:
-            manager.loader.unload_plugin(name)
+            manager.unload_plugin(name)
         except Exception:
             pass
 
-    # 3. 清空插件注册表
+    # 2. 清空插件注册表
     manager.loader._plugins.clear()
 
     # 4. 重新扫描并加载

@@ -6,10 +6,13 @@ import json
 import secrets
 import time
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
+from core.ip_blacklist import _is_trusted_proxy
+from core.utils import scrub_sensitive_error_text
 from routes.deps import verify_admin_api_key
 
 router = APIRouter(tags=["OAuth"])
@@ -80,12 +83,15 @@ def _first_header_value(value: str | None) -> str:
 
 def _build_redirect_uri(request: Request) -> str:
     """根据当前请求构建 Zoaholic 直连 OAuth callback 地址。"""
-    # 修改原因：auto 模式需要把 provider 回调指向 Zoaholic 后端，且线上通常经过反向代理。
-    # 修改方式：优先读取 X-Forwarded-Proto 和 X-Forwarded-Host，缺失时回退到 request.url 与 Host 头。
-    # 目的：让 Google、Antigravity 等允许自定义 redirect_uri 的 provider 可以直连完成 token 交换。
-    scheme = _first_header_value(request.headers.get("x-forwarded-proto")) or request.url.scheme
+    client = getattr(request, "client", None)
+    peer_host = getattr(client, "host", None)
+    trust_forwarded = peer_host is None or _is_trusted_proxy(peer_host)
+    scheme = (
+        (_first_header_value(request.headers.get("x-forwarded-proto")) if trust_forwarded else "")
+        or request.url.scheme
+    )
     host = (
-        _first_header_value(request.headers.get("x-forwarded-host"))
+        (_first_header_value(request.headers.get("x-forwarded-host")) if trust_forwarded else "")
         or _first_header_value(request.headers.get("host"))
         or request.url.netloc
     )
@@ -556,13 +562,16 @@ async def oauth_authorize(type: str, provider: str, request: Request, mode: str 
             getattr(oauth_provider, "localhost_redirect_uri", "http://localhost:8080/callback"),
         )
     else:
-        # 修改原因：auto 模式需要 provider 直接回跳 Zoaholic 后端 callback 端点。
-        # 修改方式：从当前请求和代理头动态生成 {scheme}://{host}/v1/oauth/callback。
-        # 目的：后端收到回调后可以直接换 token，并通过成功页 postMessage 通知管理前端。
-        if origin and origin.startswith("http"):
-            redirect_uri = f"{origin.rstrip('/')}/v1/oauth/callback"
+        default_redirect = _build_redirect_uri(request)
+        if origin and origin.startswith(("http://", "https://")):
+            parsed_origin = urlparse(origin)
+            parsed_default = urlparse(default_redirect)
+            if parsed_origin.netloc and parsed_origin.netloc.lower() == parsed_default.netloc.lower():
+                redirect_uri = f"{parsed_origin.scheme}://{parsed_origin.netloc}/v1/oauth/callback"
+            else:
+                redirect_uri = default_redirect
         else:
-            redirect_uri = _build_redirect_uri(request)
+            redirect_uri = default_redirect
 
     auth_url, verifier = oauth_provider.build_auth_url(state, redirect_uri)
     created_at = time.time()
@@ -635,7 +644,7 @@ async def oauth_exchange(request: Request):
                 code_verifier=flow["verifier"],
             )
     except Exception as exc:
-        return JSONResponse({"error": f"Token exchange failed: {exc}"}, status_code=500)
+        return JSONResponse({"error": f"Token exchange failed: {scrub_sensitive_error_text(str(exc))}"}, status_code=500)
 
     # 修改原因：渠道 api_keys 需要保存稳定可读的账号标识，Codex token 中通常能解析出邮箱。
     # 修改方式：优先使用 token_data.email；缺失时生成 oauth_ 前缀的短随机标识，并按 channel_id 注册。
@@ -694,7 +703,7 @@ async def oauth_callback(code: str, state: str, request: Request):
                 code_verifier=flow["verifier"],
             )
     except Exception as exc:
-        return _oauth_error_page("授权失败", f"换取 token 出错: {exc}", status_code=500)
+        return _oauth_error_page("授权失败", f"换取 token 出错: {scrub_sensitive_error_text(str(exc))}", status_code=500)
 
     # 修改原因：渠道 api_keys 需要保存稳定可读的账号标识，Codex token 中通常能解析出邮箱。
     # 修改方式：优先使用 token_data.email；缺失时生成 oauth_ 前缀的短随机标识，并按 pending flow 中的 provider 注册。

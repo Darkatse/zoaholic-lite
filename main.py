@@ -118,8 +118,11 @@ async def _do_compact_db(app):
     """执行 VACUUM INTO 压缩数据库（纯执行，不含条件判断）。"""
     global _last_compact_date
     import os, sqlite3
+    from db import get_sqlite_db_path
 
-    db_path = os.path.join(os.environ.get('DATA_DIR', 'data'), 'stats.db')
+    db_path = get_sqlite_db_path()
+    if not db_path or not os.path.exists(db_path):
+        return
     compact_path = db_path + '.compact'
     old_path = db_path + '.old'
     db_size_mb = os.path.getsize(db_path) / (1024 * 1024)
@@ -129,64 +132,56 @@ async def _do_compact_db(app):
     logger.info('[db_compact] 已挂起新请求')
 
     try:
+        from core.stats import _stats_buffer, db_semaphore
         # Step 2: 等待 stats buffer 消费完
-        try:
-            from core.stats import _stats_buffer
-            for _ in range(100):  # 最多等 10 秒
-                if len(_stats_buffer) == 0:
-                    break
-                await asyncio.sleep(0.1)
-        except ImportError:
-            pass
+        for _ in range(100):  # 最多等 10 秒
+            if len(_stats_buffer) == 0:
+                break
+            await asyncio.sleep(0.1)
 
-        # Step 3: VACUUM INTO
-        def do_vacuum_into():
-            if os.path.exists(compact_path):
-                os.remove(compact_path)
-            conn = sqlite3.connect(db_path)
-            conn.execute("VACUUM INTO ?", (compact_path,))
-            conn.close()
+        # 获取 db_semaphore，确保正在执行的统计写入事务全部完成且压缩替换期间无并发写
+        async with db_semaphore:
+            # Step 3: VACUUM INTO
+            def do_vacuum_into():
+                if os.path.exists(compact_path):
+                    os.remove(compact_path)
+                conn = sqlite3.connect(db_path)
+                conn.execute("VACUUM INTO ?", (compact_path,))
+                conn.close()
 
-        await asyncio.to_thread(do_vacuum_into)
-        compact_size_mb = os.path.getsize(compact_path) / (1024 * 1024)
-        logger.info(f'[db_compact] VACUUM INTO 完成: {db_size_mb:.0f}MB -> {compact_size_mb:.0f}MB')
+            await asyncio.to_thread(do_vacuum_into)
+            compact_size_mb = os.path.getsize(compact_path) / (1024 * 1024)
+            logger.info(f'[db_compact] VACUUM INTO 完成: {db_size_mb:.0f}MB -> {compact_size_mb:.0f}MB')
 
-        # Step 4: 关闭数据库连接
-        try:
-            from db import close_db
+            # Step 4: 关闭数据库连接
+            from db import close_db, init_db
             await close_db()
-        except ImportError:
-            pass
 
-        # Step 5: 替换文件
-        def do_replace():
-            for suffix in ['', '-wal', '-shm']:
-                src = db_path + suffix
-                dst = old_path + suffix
-                if os.path.exists(src):
-                    os.rename(src, dst)
-            os.rename(compact_path, db_path)
+            # Step 5: 替换文件
+            def do_replace():
+                for suffix in ['', '-wal', '-shm']:
+                    src = db_path + suffix
+                    dst = old_path + suffix
+                    if os.path.exists(src):
+                        os.rename(src, dst)
+                os.rename(compact_path, db_path)
 
-        await asyncio.to_thread(do_replace)
+            await asyncio.to_thread(do_replace)
 
-        # Step 6: 重新打开数据库连接
-        try:
-            from db import init_db
+            # Step 6: 重新打开数据库连接
             await init_db()
-        except ImportError:
-            pass
 
-        # Step 7: 清理旧文件
-        def do_cleanup_old():
-            for suffix in ['', '-wal', '-shm']:
-                f = old_path + suffix
-                if os.path.exists(f):
-                    try:
-                        os.remove(f)
-                    except OSError:
-                        pass
+            # Step 7: 清理旧文件
+            def do_cleanup_old():
+                for suffix in ['', '-wal', '-shm']:
+                    f = old_path + suffix
+                    if os.path.exists(f):
+                        try:
+                            os.remove(f)
+                        except OSError:
+                            pass
 
-        await asyncio.to_thread(do_cleanup_old)
+            await asyncio.to_thread(do_cleanup_old)
 
         _last_compact_date = datetime.now().date()
         logger.info(f'[db_compact] 压缩完成，节省 {db_size_mb - compact_size_mb:.0f}MB')
@@ -195,14 +190,20 @@ async def _do_compact_db(app):
         logger.error(f'[db_compact] 压缩失败: {e}')
         # 尝试恢复
         try:
-            if os.path.exists(old_path) and not os.path.exists(db_path):
+            if os.path.exists(old_path):
+                if os.path.exists(db_path):
+                    os.remove(db_path)
                 os.rename(old_path, db_path)
                 for suffix in ['-wal', '-shm']:
                     if os.path.exists(old_path + suffix):
+                        if os.path.exists(db_path + suffix):
+                            os.remove(db_path + suffix)
                         os.rename(old_path + suffix, db_path + suffix)
                 logger.info('[db_compact] 已恢复旧数据库')
             if os.path.exists(compact_path):
                 os.remove(compact_path)
+            from db import init_db
+            await init_db()
         except Exception as re:
             logger.error(f'[db_compact] 恢复也失败了: {re}')
     finally:
@@ -269,8 +270,9 @@ async def db_compact_loop(app):
                 continue
 
             # 文件大小检查
-            db_path = os.path.join(os.environ.get('DATA_DIR', 'data'), 'stats.db')
-            if not os.path.exists(db_path):
+            from db import get_sqlite_db_path
+            db_path = get_sqlite_db_path()
+            if not db_path or not os.path.exists(db_path):
                 continue
             db_size_mb = os.path.getsize(db_path) / (1024 * 1024)
             if db_size_mb <= compact_threshold_mb:
@@ -396,15 +398,8 @@ async def cleanup_expired_raw_data():
                     if (DB_TYPE or "sqlite").lower() == "sqlite":
                         try:
                             import aiosqlite
-                            db_path = None
-                            try:
-                                from db import DATABASE_URL
-                                if DATABASE_URL and DATABASE_URL.startswith("sqlite"):
-                                    db_path = DATABASE_URL.split("///")[-1]
-                            except Exception:
-                                pass
-                            if not db_path:
-                                db_path = "data/stats.db"
+                            from db import get_sqlite_db_path
+                            db_path = get_sqlite_db_path() or "data/stats.db"
                             async with aiosqlite.connect(db_path) as vacuum_conn:
                                 # 必须 fetchall() 消费游标，否则 SQLite 只会 step 1 页（4KB）就停下；
                                 # 每次最多回收 50000 页（约 200MB）并附带一次非阻塞 PASSIVE checkpoint。
@@ -865,7 +860,7 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning(f"[daily_maintenance] Activity refresh failed: {e}")
 
-    asyncio.get_running_loop().create_task(daily_maintenance())
+    daily_maintenance_task = asyncio.get_running_loop().create_task(daily_maintenance())
 
     # 定期 malloc_trim：强制 glibc 归还 free 了但没还给 OS 的内存
     # Python 大字符串（请求/响应体）释放后 pymalloc 标记为可用但 RSS 不降，
@@ -921,7 +916,7 @@ async def lifespan(app: FastAPI):
                 except Exception as e:
                     logger.warning(f"[memory_maintenance] malloc_trim failed: {e}")
 
-    asyncio.get_running_loop().create_task(memory_maintenance())
+    memory_maintenance_task = asyncio.get_running_loop().create_task(memory_maintenance())
 
     # 启动完成，删除热重载标记文件（通知 monitor 服务已恢复）
     _reload_marker = os.path.join(os.path.dirname(__file__), 'data', '.reloading')
@@ -942,27 +937,14 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
-    # 取消清理任务
-    if cleanup_task:
-        cleanup_task.cancel()
-        try:
-            await cleanup_task
-        except asyncio.CancelledError:
-            pass
-
-    if logs_cleanup_task:
-        logs_cleanup_task.cancel()
-        try:
-            await logs_cleanup_task
-        except asyncio.CancelledError:
-            pass
-
-    if compact_task:
-        compact_task.cancel()
-        try:
-            await compact_task
-        except asyncio.CancelledError:
-            pass
+    # 取消后台周期任务
+    for bg_task in (cleanup_task, logs_cleanup_task, compact_task, daily_maintenance_task, memory_maintenance_task):
+        if bg_task:
+            bg_task.cancel()
+            try:
+                await bg_task
+            except asyncio.CancelledError:
+                pass
     
     app.state.startup_completed = False
     if hasattr(app.state, 'oauth_manager'):
@@ -1048,8 +1030,7 @@ async def health_check():
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     if exc.status_code == 404:
-        token = await get_api_key(request)
-        logger.error(f"404 Error: {exc.detail} api_key: {token}")
+        logger.error(f"404 Error: {exc.detail} path={request.url.path}")
     if isinstance(exc.detail, dict) and exc.detail.get("type") == "ip_blocked":
         # 修改原因：IP 黑名单命中需要返回需求指定的 error.type，而默认 403 会变成 permission_denied_error。
         # 修改方式：当依赖鉴权抛出的 detail 带有 type=ip_blocked 时，显式传入 error_type。
@@ -1065,10 +1046,10 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 # 配置 CORS 中间件
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 允许所有来源
-    allow_credentials=True,
-    allow_methods=["*"],  # 允许所有 HTTP 方法
-    allow_headers=["*"],  # 允许所有头部字段
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.add_middleware(StatsMiddleware, debug=is_debug)
@@ -1133,7 +1114,7 @@ model_handler: Optional[ModelRequestHandler] = None
 from fastapi.responses import FileResponse
 
 STATIC_ROOT = Path("./static").resolve()
-SPA_ROUTES = ["/channels", "/playground", "/admin", "/settings", "/logs", "/login"]
+SPA_ROUTES = ["/channels", "/playground", "/plugins", "/admin", "/settings", "/logs", "/backend-logs", "/workspace", "/login", "/setup"]
 HTML_NO_CACHE_HEADERS = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
 ASSET_CACHE_HEADERS = {"Cache-Control": "public, max-age=31536000, immutable"}
 
@@ -1209,7 +1190,7 @@ if __name__ == '__main__':
         "host": "0.0.0.0",
         "port": PORT,
         "proxy_headers": True,
-        "forwarded_allow_ips": "*",
+        "forwarded_allow_ips": os.getenv("FORWARDED_ALLOW_IPS", "127.0.0.1"),
         # 修改原因：/v1/responses 新增 WebSocket 透传端点，原配置 ws="none" 会让 WS 握手落到 SPA fallback 返回 HTML。
         # 修改方式：启用 websockets 实现（依赖已存在）。
         # 目的：让客户端 WS 连接正常完成 101 升级。

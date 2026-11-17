@@ -1,6 +1,6 @@
+from io import StringIO
 from ruamel.yaml import YAML
 
-# 假设我们有以下 YAML 内容
 yaml_content = """
 # 这是顶级注释
 key1: value1  # 行尾注释
@@ -17,28 +17,19 @@ list_key:
   - item2  # 列表项的注释
 """
 
-# 创建 YAML 对象
-yaml = YAML()
-yaml.preserve_quotes = True
-yaml.indent(mapping=2, sequence=4, offset=2)
 
-with open('api.yaml', 'r', encoding='utf-8') as file:
-    data = yaml.load(file)
+def test_ruamel_yaml_preserves_structure_and_comments():
+    yaml = YAML()
+    yaml.preserve_quotes = True
+    yaml.indent(mapping=2, sequence=4, offset=2)
 
-# data = yaml.load(yaml_content)
-# 加载 YAML 数据
-print(data)
+    data = yaml.load(yaml_content)
+    assert data["key1"] == "value1"
+    assert data["nested"]["subkey2"] == "subvalue2"
 
-# # 修改数据
-# data['key1'] = 'new_value1'
-# data['nested']['subkey1'] = 'new_subvalue1'
-# data['list_key'].append('new_item')
-
-# 将修改后的数据写回文件（这里我们使用 StringIO 来模拟文件操作）
-# from io import StringIO
-# output = StringIO()
-# yaml.dump(data, output)
-# print(output.getvalue())
-
-with open('formatted.yaml', 'w', encoding='utf-8') as file:
-    yaml.dump(data, file)
+    data["key1"] = "new_value1"
+    output = StringIO()
+    yaml.dump(data, output)
+    dumped = output.getvalue()
+    assert "# 这是顶级注释" in dumped
+    assert "new_value1" in dumped

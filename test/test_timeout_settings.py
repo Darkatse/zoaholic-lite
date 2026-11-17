@@ -92,7 +92,9 @@ def app(monkeypatch):
         "preferences": {"stream_header_timeout": 60},
     }))
     monkeypatch.setattr(admin, "get_app", lambda: instance)
-    monkeypatch.setattr(admin, "_persist_config", AsyncMock(return_value={}))
+    persist_mock = AsyncMock(return_value={})
+    monkeypatch.setattr(admin, "_persist_config", persist_mock)
+    monkeypatch.setattr(admin, "persist_config", persist_mock)
     return instance
 
 

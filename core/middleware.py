@@ -652,8 +652,10 @@ class StatsMiddleware:
                     import traceback
                     traceback.print_exc()
                 import traceback as _tb
+                from core.utils import scrub_sensitive_error_text
                 logger.error("Error processing request: %s\n%s", str(e), _tb.format_exc())
-                response = openai_error_response(f"Internal server error: {str(e)}", 500)
+                safe_err = scrub_sensitive_error_text(str(e))
+                response = openai_error_response(f"Internal server error: {safe_err}", 500)
                 await response(scope, receive_wrapper, send)
         finally:
             scope.pop("_zoaholic_parsed_json", None)

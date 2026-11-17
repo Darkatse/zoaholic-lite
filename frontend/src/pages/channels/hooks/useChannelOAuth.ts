@@ -67,6 +67,7 @@ export function useChannelOAuth({
   // 目的：在不继续拆分 CRUD、Key、子渠道等逻辑的前提下，降低 useChannelEditor 的体积和职责范围。
   const [oauthAccounts, setOauthAccounts] = useState<Record<string, any>>({});
   const oauthKeyFocusSnapshotRef = useRef<Record<number, string>>({});
+  const oauthRefreshSeqRef = useRef(0);
   const [importModalIdx, setImportModalIdx] = useState<number | null>(null);
   const [importToken, setImportToken] = useState('');
   const [importing, setImporting] = useState(false);
@@ -100,6 +101,7 @@ export function useChannelOAuth({
     // 修改原因：OAuth 账号列表按 provider name 分层保存，打开编辑面板和登录成功后都要读取当前渠道分组。
     // 修改方式：请求 /v1/oauth/accounts?provider=当前渠道名，成功后统一归一化 quota 字段。
     // 目的：避免不同 OAuth 渠道之间串读同邮箱账号状态。
+    const seq = ++oauthRefreshSeqRef.current;
     const providerName = (formData?.provider || '').trim();
     if (!providerName) {
       setOauthAccounts({});
@@ -107,17 +109,19 @@ export function useChannelOAuth({
     }
     try {
       const res = await apiFetch(`/v1/oauth/accounts?provider=${encodeURIComponent(providerName)}`, { headers: { Authorization: `Bearer ${token}` } });
+      if (seq !== oauthRefreshSeqRef.current) return;
       if (!res.ok) {
         setOauthAccounts({});
         return;
       }
       const data = await res.json();
+      if (seq !== oauthRefreshSeqRef.current) return;
       const normalized = normalizeOAuthAccountStateMap(data);
       setOauthAccounts(normalized);
       // 把 oauth_state 中存在但 formData.api_keys 中不存在的 key 追加到表单
       if (opts?.syncFormKeys && normalized && Object.keys(normalized).length > 0) {
         setFormData(prev => {
-          if (!prev) return prev;
+          if (!prev || prev.provider.trim() !== providerName) return prev;
           const existingKeys = new Set(prev.api_keys.map(k => k.key.replace(/^!/, '').trim()));
           const newKeyIds = Object.keys(normalized).filter(k => k && !existingKeys.has(k));
           if (newKeyIds.length === 0) return prev;
@@ -128,7 +132,9 @@ export function useChannelOAuth({
         });
       }
     } catch {
-      setOauthAccounts({});
+      if (seq === oauthRefreshSeqRef.current) {
+        setOauthAccounts({});
+      }
     }
   }, [token, formData?.provider, setFormData]);
 
@@ -139,6 +145,7 @@ export function useChannelOAuth({
     if (isModalOpen && isOAuthEngine) {
       void refreshOAuthAccounts();
     } else if (!isModalOpen) {
+      oauthRefreshSeqRef.current += 1;
       setOauthAccounts({});
     }
   }, [isModalOpen, isOAuthEngine, refreshOAuthAccounts]);
@@ -162,6 +169,9 @@ export function useChannelOAuth({
     });
     if (targets.length === 0) return;
 
+    const controller = new AbortController();
+    let cancelled = false;
+
     setOauthAccounts(prev => {
       const next = { ...prev };
       for (const [keyId] of targets) {
@@ -173,6 +183,7 @@ export function useChannelOAuth({
     apiFetch('/v1/channels/balance', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      signal: controller.signal,
       body: JSON.stringify({
         provider: formData?.provider,
         engine: formData?.engine,
@@ -183,13 +194,16 @@ export function useChannelOAuth({
     })
       .then(async res => {
         if (res.ok) return await res.json();
-        try {
-          const errBody = await res.json();
-          toastWarning(errBody?.error || `HTTP ${res.status}`);
-        } catch { /* ignore */ }
+        if (!cancelled) {
+          try {
+            const errBody = await res.json();
+            toastWarning(errBody?.error || `HTTP ${res.status}`);
+          } catch { /* ignore */ }
+        }
         return null;
       })
       .then(data => {
+        if (cancelled) return;
         setOauthAccounts(prev => {
           const next = { ...prev };
           const perAccount = data?.results || {};
@@ -216,6 +230,7 @@ export function useChannelOAuth({
         });
       })
       .catch(() => {
+        if (cancelled) return;
         setOauthAccounts(prev => {
           const next = { ...prev };
           for (const [keyId] of targets) {
@@ -227,6 +242,11 @@ export function useChannelOAuth({
           return next;
         });
       });
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
   }, [isModalOpen, isOAuthEngine, oauthAccounts, token, formData?.provider]);
 
   const handleOAuthKeyFocus = (idx: number, keyStr: string) => {
@@ -330,21 +350,24 @@ export function useChannelOAuth({
         return;
       }
       const { auth_url, state, mode } = await res.json();
-      const authWindow = window.open(auth_url, '_blank', 'width=600,height=700');
-      if (!authWindow) {
-        toastError('无法打开弹出窗口，请允许弹窗后重试');
-        return;
-      }
       if (mode === 'manual') {
+        const authWindow = window.open(auth_url, '_blank', 'width=600,height=700');
+        if (!authWindow) {
+          toastError('无法打开弹出窗口，请允许弹窗后重试');
+          return;
+        }
         setOauthManualState({ idx, state, provider: providerName });
         setManualUrl('');
         return;
       }
+      let authWindow: Window | null = null;
       let timeoutId: number | undefined;
       const handler = (event: MessageEvent) => {
+        if (event.origin !== window.location.origin) return;
+        if (!authWindow || event.source !== authWindow) return;
         if (event.data?.type !== 'oauth_callback_success') return;
-        if (event.data?.state && event.data.state !== state) return;
-        if (event.data?.provider && event.data.provider !== providerName) return;
+        if (!state || event.data?.state !== state) return;
+        if (event.data?.provider !== providerName) return;
         window.removeEventListener('message', handler);
         if (timeoutId !== undefined) window.clearTimeout(timeoutId);
         const keyId = event.data.key_id;
@@ -353,6 +376,12 @@ export function useChannelOAuth({
         if (!authWindow.closed) authWindow.close();
       };
       window.addEventListener('message', handler);
+      authWindow = window.open(auth_url, '_blank', 'width=600,height=700');
+      if (!authWindow) {
+        window.removeEventListener('message', handler);
+        toastError('无法打开弹出窗口，请允许弹窗后重试');
+        return;
+      }
       timeoutId = window.setTimeout(() => window.removeEventListener('message', handler), 300000);
     } catch (e) {
       toastError(e instanceof Error ? e.message : String(e), '登录出错');

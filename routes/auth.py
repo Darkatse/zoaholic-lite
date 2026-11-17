@@ -27,6 +27,7 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
 
 MAX_LOGIN_FAILURES = 6
 LOGIN_LOCKOUT_WINDOW_SECONDS = 600.0
+MAX_LOGIN_FAILURE_IPS = 4096
 _LOGIN_FAILURES: dict[str, deque[float]] = {}
 _select_admin_api_key_from_config = select_admin_api_key
 
@@ -58,11 +59,18 @@ def _check_login_lockout(client_ip: str) -> None:
 
 def _record_login_failure(client_ip: str) -> None:
     now = monotonic()
-    bucket = _LOGIN_FAILURES.setdefault(client_ip, deque())
     cutoff = now - LOGIN_LOCKOUT_WINDOW_SECONDS
+    bucket = _LOGIN_FAILURES.setdefault(client_ip, deque())
     while bucket and bucket[0] < cutoff:
         bucket.popleft()
     bucket.append(now)
+    if len(_LOGIN_FAILURES) > MAX_LOGIN_FAILURE_IPS:
+        expired_ips = [ip for ip, q in _LOGIN_FAILURES.items() if not q or q[-1] < cutoff]
+        for ip in expired_ips:
+            _LOGIN_FAILURES.pop(ip, None)
+        while len(_LOGIN_FAILURES) > MAX_LOGIN_FAILURE_IPS:
+            oldest_ip = next(iter(_LOGIN_FAILURES))
+            _LOGIN_FAILURES.pop(oldest_ip, None)
 
 
 def _clear_login_failures(client_ip: str) -> None:

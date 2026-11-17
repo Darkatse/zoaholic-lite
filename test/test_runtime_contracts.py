@@ -381,3 +381,60 @@ async def test_csp_headers_and_oauth_nonce():
     assert "script-src 'nonce-" in csp
     body_text = oauth_resp.body.decode("utf-8")
     assert 'nonce="' in body_text
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_and_sqlite_path_resolution(monkeypatch):
+    import db as db_mod
+    from core.rate_limit import InMemoryRateLimiter
+
+    limiter = InMemoryRateLimiter()
+    limiter.MAX_KEYS = 4
+    for idx in range(6):
+        limited = await limiter.is_rate_limited(f"k-{idx}", [(2, 60)])
+        assert limited is False
+    assert len(limiter.requests) <= 4
+
+    monkeypatch.setattr(db_mod, "DISABLE_DATABASE", False)
+    monkeypatch.setattr(db_mod, "DB_TYPE", "sqlite")
+    monkeypatch.setattr(db_mod, "DATABASE_URL", "sqlite+aiosqlite:///./custom/test_stats.db")
+    assert db_mod.get_sqlite_db_path() == "./custom/test_stats.db"
+    await db_mod.init_db()
+    assert str(db_mod.db_engine.url) == "sqlite+aiosqlite:///./custom/test_stats.db"
+    await db_mod.close_db()
+
+
+@pytest.mark.asyncio
+async def test_oauth_origin_host_matching():
+    from routes import oauth as oauth_routes
+
+    class DummyProvider:
+        redirect_mode = "auto"
+
+        def build_auth_url(self, state, redirect_uri):
+            return f"https://auth.example/authorize?state={state}&redirect_uri={redirect_uri}", "v-1"
+
+    req = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(oauth_manager=SimpleNamespace(_providers={"ag": DummyProvider()}))),
+        headers={"host": "gateway.local:8000"},
+        url=SimpleNamespace(scheme="http", netloc="gateway.local:8000"),
+        client=SimpleNamespace(host="127.0.0.1"),
+    )
+    res_evil = await oauth_routes.oauth_authorize(
+        type="ag",
+        provider="ag-1",
+        request=req,
+        origin="https://evil.example:9999",
+    )
+    assert "http://gateway.local:8000/v1/oauth/callback" in res_evil["auth_url"]
+
+    res_same = await oauth_routes.oauth_authorize(
+        type="ag",
+        provider="ag-1",
+        request=req,
+        origin="https://gateway.local:8000",
+    )
+    assert "https://gateway.local:8000/v1/oauth/callback" in res_same["auth_url"]
+
+
+

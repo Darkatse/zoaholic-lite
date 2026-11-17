@@ -347,6 +347,7 @@ async def create_tables():
         await _create_tables_d1()
         return
 
+    needs_sqlite_vacuum = False
     async with db_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
@@ -356,15 +357,7 @@ async def create_tables():
             current_av = (await conn.execute(text("PRAGMA auto_vacuum"))).scalar()
             if current_av != 2:
                 await conn.execute(text("PRAGMA auto_vacuum = INCREMENTAL"))
-                # auto_vacuum 切换需要 VACUUM 生效
-                raw_conn = await conn.get_raw_connection()
-                raw = raw_conn.dbapi_connection
-                if hasattr(raw, '_connection'):
-                    # aiosqlite wraps the real connection
-                    await raw._connection.execute("VACUUM")
-                else:
-                    raw.execute("VACUUM")
-                logger.info("SQLite auto_vacuum set to INCREMENTAL")
+                needs_sqlite_vacuum = True
 
         # 检查并添加缺失的列 - 扩展此简易迁移以支持 SQLite / PostgreSQL / TiDB(MySQL)
         db_type = (DB_TYPE or "sqlite").lower()
@@ -439,6 +432,12 @@ async def create_tables():
                                 break
 
                 await conn.run_sync(_upgrade_text_to_mediumtext)
+
+    if needs_sqlite_vacuum:
+        async with db_engine.connect() as vacuum_conn:
+            autocommit_conn = await vacuum_conn.execution_options(isolation_level="AUTOCOMMIT")
+            await autocommit_conn.execute(text("VACUUM"))
+            logger.info("SQLite auto_vacuum set to INCREMENTAL")
 
 
 # ============== 成本计算 ==============
@@ -839,7 +838,10 @@ async def _stats_consumer() -> None:
             while _stats_buffer and len(batch) < _STATS_BATCH_SIZE:
                 batch.append(_stats_buffer.popleft())
 
-            await _batch_write_stats(batch)
+            try:
+                await _batch_write_stats(batch)
+            except Exception as e:
+                logger.error(f"Stats consumer batch write error: {e}")
     except asyncio.CancelledError:
         while _stats_buffer:
             batch = []
@@ -849,8 +851,6 @@ async def _stats_consumer() -> None:
                 await _batch_write_stats(batch)
             except Exception:
                 pass
-    except Exception as e:
-        logger.error(f"Stats consumer crashed: {e}")
     finally:
         _stats_consumer_started = False
         _stats_flush_event = None
