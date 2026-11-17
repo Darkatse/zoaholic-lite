@@ -1,15 +1,14 @@
 """
-针对安全审计报告 (VULN-01 ~ VULN-17) 中全部真实漏洞修复的回归测试。
+网关运行时契约、请求管道与路由边界回归测试。
 """
 
 import asyncio
 import base64
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 
 from core.auth import authenticate_admin_api_key_token, verify_admin_api_key
 from core.channels.openai_channel import get_gpt_payload
@@ -25,7 +24,7 @@ from routes import setup as setup_routes
 from routes import workspace as workspace_routes
 
 
-def test_vuln07_client_ip_ignores_forged_xff_first_hop_and_prefers_cf_connecting_ip():
+def test_client_ip_proxy_hop_selection():
     scope = {"client": ("10.0.0.1", 12345)}
     headers = [
         (b"x-forwarded-for", b"1.1.1.1, 198.51.100.42"),
@@ -48,7 +47,7 @@ def test_vuln07_client_ip_ignores_forged_xff_first_hop_and_prefers_cf_connecting
     assert StatsMiddleware._get_client_ip(direct_scope, headers_with_cf) == "198.51.100.200"
 
 
-def test_vuln11_scrub_sensitive_error_text_redacts_query_keys_and_provider_secrets():
+def test_error_text_formatting_redacts_tokens():
     raw_err = (
         "Client error '404 Not Found' for url "
         "'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=AIzaSyD1234567890abcdefghijk&alt=sse' "
@@ -62,7 +61,7 @@ def test_vuln11_scrub_sensitive_error_text_redacts_query_keys_and_provider_secre
     assert "Bearer ***" in scrubbed
 
 
-def test_vuln12_no_silent_promotion_of_user_key_to_admin():
+def test_admin_key_role_selection():
     conf_only_users = {
         "api_keys": [
             {"api": "zk-user-first", "role": "user"},
@@ -85,7 +84,7 @@ def test_vuln12_no_silent_promotion_of_user_key_to_admin():
 
 
 @pytest.mark.asyncio
-async def test_vuln09_login_brute_force_lockout(monkeypatch):
+async def test_login_attempt_throttle(monkeypatch):
     auth_routes._LOGIN_FAILURES.clear()
     fake_app = FastAPI()
     monkeypatch.setattr(auth_routes, "get_app", lambda: fake_app)
@@ -110,7 +109,6 @@ async def test_vuln09_login_brute_force_lockout(monkeypatch):
             )
         assert exc_info.value.status_code == 403
 
-    # 第 MAX_LOGIN_FAILURES + 1 次即使提供正确密码也应触发 429 锁定
     with pytest.raises(HTTPException) as locked_exc:
         await auth_routes.login(
             request=req,
@@ -127,14 +125,13 @@ async def test_vuln09_login_brute_force_lockout(monkeypatch):
     auth_routes._LOGIN_FAILURES.clear()
 
 
-def test_vuln08_workspace_blocks_symlink_escape(tmp_path, monkeypatch):
+def test_workspace_path_resolution(tmp_path, monkeypatch):
     monkeypatch.setattr(workspace_routes, "PROJECT_ROOT", tmp_path.resolve())
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     secret_file = tmp_path / ".env.production"
     secret_file.write_text("SECRET=123", encoding="utf-8")
 
-    # 即使在白名单 data/ 下创建指向项目内敏感文件的软链接，也必须被拦截
     link_path = data_dir / "leak.txt"
     try:
         link_path.symlink_to(secret_file)
@@ -147,7 +144,7 @@ def test_vuln08_workspace_blocks_symlink_escape(tmp_path, monkeypatch):
     assert exc_info.value.status_code == 403
 
 
-def test_vuln14_generate_api_key_requires_admin_dependency():
+def test_generate_api_key_route_dependency():
     for route in admin_routes.router.routes:
         if getattr(route, "path", None) == "/v1/generate-api-key":
             dep_calls = [dep.call for dep in route.dependant.dependencies]
@@ -156,7 +153,7 @@ def test_vuln14_generate_api_key_requires_admin_dependency():
     pytest.fail("Route /v1/generate-api-key not found")
 
 
-def test_vuln15_file_to_text_rejects_oversized_base64():
+def test_file_to_text_base64_limit():
     small_b64 = base64.b64encode(b"hello world").decode("ascii")
     assert _decode_content(small_b64) == "hello world"
 
@@ -165,7 +162,7 @@ def test_vuln15_file_to_text_rejects_oversized_base64():
 
 
 @pytest.mark.asyncio
-async def test_vuln16_openai_stream_enforces_include_usage_and_499_disconnect_fallback():
+async def test_openai_stream_usage_and_disconnect_accounting():
     req = RequestModel(
         model="gpt-4o",
         messages=[{"role": "user", "content": "hello"}],
@@ -180,7 +177,6 @@ async def test_vuln16_openai_stream_enforces_include_usage_and_499_disconnect_fa
     _, _, payload = await get_gpt_payload(req, "openai", provider, "sk-test")
     assert payload["stream_options"]["include_usage"] is True
 
-    # 验证流式响应在客户端断连 (499) 且未收到尾帧 usage 时，回退记录预估输入/输出 token
     captured_stats = []
 
     async def body_gen():
@@ -213,7 +209,7 @@ async def test_vuln16_openai_stream_enforces_include_usage_and_499_disconnect_fa
 
 
 @pytest.mark.asyncio
-async def test_vuln13_model_path_traversal_and_follow_redirects_disabled():
+async def test_model_identifier_validation_and_client_options():
     from core.client_manager import ClientManager
     from core.handler import ModelRequestHandler
 
@@ -385,7 +381,3 @@ async def test_csp_headers_and_oauth_nonce():
     assert "script-src 'nonce-" in csp
     body_text = oauth_resp.body.decode("utf-8")
     assert 'nonce="' in body_text
-
-
-
-
